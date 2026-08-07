@@ -1,8 +1,6 @@
 # n550 · Qwen3-0.6B 移植交付
 
 把 Qwen3-0.6B 跑在自研 RISC-V AI CPU（RVV 1.0 + AME 矩阵扩展）上，
-目标是 FPGA demo。
-
 本仓库是交给两个下游团队的东西，各看各的目录。
 
 ## 给 RTL 验证 → [`rtl_verification/`](rtl_verification/)
