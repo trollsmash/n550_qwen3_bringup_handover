@@ -9,7 +9,7 @@
 只依赖标准库，Python 3.8+ 即可，不需要 numpy。
 
 本脚本的重点不是"报个 PASS/FAIL"，而是**把失败模式翻译成原因**。
-下面 diagnose() 里的每一条都对应一类真实踩过的坑，读一遍能省很多时间。
+下面 diagnose() 里的每一条都对应一类典型的失败模式，读一遍能省很多时间。
 """
 
 import argparse
@@ -75,7 +75,7 @@ def find_case(cid):
 
 
 def diagnose(got, ref, M, N, dirty_n, zero_n):
-    """把失败模式翻译成可能的原因。每条都来自真实踩过的坑。"""
+    """把失败模式翻译成可能的原因。"""
     out = []
     total = M * N
 

@@ -66,7 +66,7 @@
 
 /* 权重与分词器的位置由 host 经 PCIe 后门写入，我们自己定。
  * 留 128 MB 给程序镜像 —— 必须大于镜像实际末端，否则 start.S 清 BSS
- * 时会把权重头部擦掉（已经踩过一次）。 */
+ * 时会把权重头部擦掉，症状是"权重 magic 不对"，看起来像加载没生效。 */
 #define BOARD_WEIGHTS_ADDR    (BOARD_DRAM_BASE + 0x08000000)
 #define BOARD_TOKENIZER_ADDR  (BOARD_DRAM_BASE + 0x50000000)
 

@@ -1,7 +1,7 @@
 # Qwen3-0.6B on RISC-V —— FPGA 上板交付包
 
 > 由 `tools/44_pack_fpga.sh` 生成，地址取自 `src/bsp/board.h`。
-> 生成时间：2026-08-07 17:05
+> 生成时间：2026-08-07 17:22
 
 板子：S2C，DDR `0x80000000`–`0xEFFFFFFF`，
 串口 `0x20100000`（16550, 8N1），CPU/AME 50 MHz。
@@ -40,8 +40,9 @@ L0 第六步会回填性能采样数据（`CYCLES` / `ITERS`），**把这两个
 `L1_ame_vectors/` 是给 RTL 验证同事的独立交付包，这里整份带上，
 上板时若 AME 数值出问题，手边就有能立刻复现的最小激励。
 
-看该目录下的 `README.md`。8 个 case，程序自带比对，
-把 `cases/001*/prog.hex` 装到 `0x80000000` 起即可。
+看该目录下的 `README.md`。12 个 case（8 个纯 AME + 4 个 RVV/AME 混合），
+程序自带比对，把 `cases/001*/prog.hex` 装到 `0x80000000` 起即可。
+先跑完前 8 个纯 AME 的，再碰混合的 —— 前者不依赖 cache 行为。
 
 ### L2 / L3 —— 全模型
 

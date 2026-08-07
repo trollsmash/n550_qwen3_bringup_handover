@@ -54,7 +54,7 @@ cmodel  = medany
 | 扩展 | 谁在用 | 缺了会怎样 |
 |---|---|---|
 | `xewmatrix1p0` | 全部 AME 指令 | `mlae16`/`mfmacc`/`msce32` 全部报 illegal instruction |
-| `zfh` `zfbfmin` `zvfh` `zvfbfmin` `zvfbfwma` | BF16 相关 | `vfwcvtbf16` 等非法指令。曾因漏掉它排查了三小时 |
+| `zfh` `zfbfmin` `zvfh` `zvfbfmin` `zvfbfwma` | BF16 相关 | `vfwcvtbf16` 等非法指令 |
 | `zicbom` `zicbop` `zicboz` | `cbo.clean/inval/flush` | 缓存同步代码编不过（会有明确的 `#error` 提示） |
 | `xdcache` | `l1d_clean_all` / `l1d_inv_all` | 同上。**这两条指令 QEMU 上是非法指令，只有真机能跑** |
 

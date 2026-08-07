@@ -55,7 +55,7 @@ rv64gcv_zfh_zfbfmin_zvfh_zvfbfmin_zvfbfwma_xewmatrix1p0_zicbom_zicbop_zicboz_xdc
 
 程序镜像（含 BSS 与栈）不能越过 `BOARD_WEIGHTS_ADDR`。
 `start.S` 清 BSS 时会把重叠部分擦成 0，症状是"权重 magic 不对"，
-**看起来完全像是 PCIe 加载没生效**。我们踩过一次，查了很久。
+**看起来完全像是 PCIe 加载没生效**。
 `main_baremetal.c` 的 `check_layout()` 就是为此设的护栏，启动时会把
 镜像末端和权重起点都打出来，别删。
 

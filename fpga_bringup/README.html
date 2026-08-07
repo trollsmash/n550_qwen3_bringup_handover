@@ -71,7 +71,7 @@ td code, th code { white-space:nowrap; }
 <body>
 <main>
 <h1>Qwen3-0.6B on RISC-V —— FPGA 上板交付包</h1>
-<blockquote><p>由 <code>tools/44_pack_fpga.sh</code> 生成，地址取自 <code>src/bsp/board.h</code>。 生成时间：2026-08-07 17:05</p></blockquote>
+<blockquote><p>由 <code>tools/44_pack_fpga.sh</code> 生成，地址取自 <code>src/bsp/board.h</code>。 生成时间：2026-08-07 17:22</p></blockquote>
 <p>板子：S2C，DDR <code>0x80000000</code>–<code>0xEFFFFFFF</code>， 串口 <code>0x20100000</code>（16550, 8N1），CPU/AME 50 MHz。</p>
 <hr>
 <h2>按这个顺序走，别跳级</h2>
@@ -84,7 +84,7 @@ td code, th code { white-space:nowrap; }
 <p>L0 第六步会回填性能采样数据（<code>CYCLES</code> / <code>ITERS</code>），<strong>把这两个数发回软件侧</strong>： 它们能把每 token 耗时从&quot;0.2 秒到 3 秒&quot;这个跨一个数量级的估算收敛成确定值。</p>
 <h3>L1 —— AME 数值</h3>
 <p><code>L1_ame_vectors/</code> 是给 RTL 验证同事的独立交付包，这里整份带上， 上板时若 AME 数值出问题，手边就有能立刻复现的最小激励。</p>
-<p>看该目录下的 <code>README.md</code>。8 个 case，程序自带比对， 把 <code>cases/001*/prog.hex</code> 装到 <code>0x80000000</code> 起即可。</p>
+<p>看该目录下的 <code>README.md</code>。12 个 case（8 个纯 AME + 4 个 RVV/AME 混合）， 程序自带比对，把 <code>cases/001*/prog.hex</code> 装到 <code>0x80000000</code> 起即可。 先跑完前 8 个纯 AME 的，再碰混合的 —— 前者不依赖 cache 行为。</p>
 <h3>L2 / L3 —— 全模型</h3>
 <p>地址见 <code>addresses.txt</code>。<strong>L2 先不要加载 <code>tok.bin</code></strong>： 不加载时程序走回归模式，用固定的 4 个 token 跑一遍并与黄金数据自检， 不依赖分词器，出问题的范围更小。L2 过了再加 <code>tok.bin</code> 跑 L3。</p>
 <hr>
