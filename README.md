@@ -38,6 +38,51 @@ AME 矩阵扩展的指令级测试向量，12 个 case（8 个纯 AME + 4 个 RV
 获取方式与 md5 见
 [`fpga_bringup/L2_L3_fullmodel/GET_WEIGHTS.md`](fpga_bringup/L2_L3_fullmodel/GET_WEIGHTS.md)。
 
+## 构建环境
+
+两个目录里所有 `.bin` / `.elf` 都用同一套参数编译：
+
+```
+march   = rv64gcv_zfh_zfbfmin_zvfh_zvfbfmin_zvfbfwma_xewmatrix1p0_zicbom_zicbop_zicboz_xdcache
+mabi    = lp64d
+cmodel  = medany
+编译器  = riscv-unknown-elf-gcc (ESWIN GCC compile time:2026-08-02 04:31:04) 14.1.1 20240618
+```
+
+**ISA 串不要随手删减。**每段都有人在用，而且缺失后的症状都具有迷惑性：
+
+| 扩展 | 谁在用 | 缺了会怎样 |
+|---|---|---|
+| `xewmatrix1p0` | 全部 AME 指令 | `mlae16`/`mfmacc`/`msce32` 全部报 illegal instruction |
+| `zfh` `zfbfmin` `zvfh` `zvfbfmin` `zvfbfwma` | BF16 相关 | `vfwcvtbf16` 等非法指令。曾因漏掉它排查了三小时 |
+| `zicbom` `zicbop` `zicboz` | `cbo.clean/inval/flush` | 缓存同步代码编不过（会有明确的 `#error` 提示） |
+| `xdcache` | `l1d_clean_all` / `l1d_inv_all` | 同上。**这两条指令 QEMU 上是非法指令，只有真机能跑** |
+
+`mcmodel=medany` 也是必需的：镜像装在 `0x8000_0000`，用默认的 `medlow`
+会出现 relocation truncated。
+
+### 重新编译
+
+**FPGA 侧**（`fpga_bringup/src/`，详见其中的 `BUILD.md`）：
+
+```bash
+source tools/env.sh                                            # 先改工具链路径
+BOARD=s2c tools/build_riscv.sh bringup                         # L0
+KERNEL=ame OPS=rvv BOARD=s2c tools/build_riscv.sh baremetal    # L2/L3
+```
+
+**RTL 侧**（`rtl_verification/golden_src/`，构建参数另见其中的 `BUILD_INFO.txt`）：
+
+```bash
+python3 golden_src/40_gen_ame_vectors.py --base 0x<基址> --out .
+golden_src/41_build_vectors.sh
+```
+
+> `rtl_verification/` 里 `prog.elf` 的 `.riscv.attributes` 段被链接脚本丢弃了
+> （为了让 objcopy 出的镜像干净），无法从二进制反查 march —— 以本节和
+> `BUILD_INFO.txt` 为准。`fpga_bringup/` 的 elf 保留了该段，可用
+> `readelf -A` 核对。
+
 ## 几条踩出来的经验，可能对你们也有用
 
 * **AME 的访存绕过 L1D**，与 RVV/标量之间的一致性只能靠软件维护。
