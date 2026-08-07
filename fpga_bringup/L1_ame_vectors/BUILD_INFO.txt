@@ -1,0 +1,16 @@
+# 本包的构建环境（由 tools/41_build_vectors.sh 生成）
+# 生成时间: 2026-08-07 17:05
+
+march   = rv64gcv_zfh_zfbfmin_zvfh_zvfbfmin_zvfbfwma_xewmatrix1p0_zicbom_zicbop_zicboz_xdcache
+mabi    = lp64d
+cmodel  = medany
+编译器  = riscv-unknown-elf-gcc (ESWIN GCC compile time:2026-08-02 04:31:04) 14.1.1 20240618
+
+# 各段扩展的作用（少任何一段，症状都具有迷惑性）：
+#   xewmatrix1p0            AME 矩阵指令。缺 => 所有 ml*/mfmacc/msce 不认
+#   zvfbfmin/zvfbfwma/zfbfmin/zfh/zvfh
+#                           BF16 相关。缺 => vfwcvtbf16 等非法指令
+#   zicbom/zicbop/zicboz    cbo.clean/inval/flush。009a/010/011 用
+#   xdcache                 l1d_clean_all/l1d_inv_all。009b 用
+
+# 注意：xdcache 的两条指令在 QEMU 上是非法指令，只有真机能跑。

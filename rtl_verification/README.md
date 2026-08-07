@@ -260,6 +260,16 @@ source <你的工具链环境>            # 需要 $RISCV_ISA / $CROSS
 golden_src/41_build_vectors.sh
 ```
 
+本包用的构建参数记在 **`BUILD_INFO.txt`** 里（march、mabi、编译器版本，
+以及每段扩展缺失时的症状）。`prog.elf` 的 `.riscv.attributes` 段被链接脚本
+丢弃了（为了让 objcopy 出的镜像干净），所以无法从二进制反查，请看那个文件。
+
+march 是：
+
+```
+rv64gcv_zfh_zfbfmin_zvfh_zvfbfmin_zvfbfwma_xewmatrix1p0_zicbom_zicbop_zicboz_xdcache
+```
+
 只改基址的话其实**不必重新汇编**：`a.hex` / `b.hex` / `c_ref.hex` 与地址无关，
 只有 `prog.hex` 里的绝对地址需要重生成。
 

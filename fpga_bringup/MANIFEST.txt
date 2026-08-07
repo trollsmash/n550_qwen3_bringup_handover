@@ -1,5 +1,5 @@
 # 文件清单（给人看的；机器校验用 checksums.md5）
-# 生成时间 2026-08-07 16:50
+# 生成时间 2026-08-07 17:06
 #
 # 注意：w.bin (1.11 GB) 不在本仓库，也不在下面的清单里。
 #       它的大小与 md5 见 L2_L3_fullmodel/GET_WEIGHTS.md，请单独核对。
@@ -7,12 +7,13 @@
 # 校验：md5sum -c checksums.md5
 
         字节  文件
-          3608  L0_bringup/bringup_s2c.bin
-         10520  L0_bringup/bringup_s2c.elf
+          3624  L0_bringup/bringup_s2c.bin
+         10560  L0_bringup/bringup_s2c.elf
           9483  L0_bringup/checklist.html
           4615  L0_bringup/checklist.md
+           820  L1_ame_vectors/BUILD_INFO.txt
          19985  L1_ame_vectors/README.html
-         13589  L1_ame_vectors/README.md
+         13995  L1_ame_vectors/README.md
           8192  L1_ame_vectors/cases/001_bf16_full_tile/a.bin
          18553  L1_ame_vectors/cases/001_bf16_full_tile/a.hex
           8192  L1_ame_vectors/cases/001_bf16_full_tile/b.bin

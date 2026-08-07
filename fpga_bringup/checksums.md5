@@ -1,9 +1,10 @@
-ec4677a52a4e63ac706e48d0f1d2fe7c  L0_bringup/bringup_s2c.bin
-9ae1525fcd5e161a3f8a943e7a1b55ac  L0_bringup/bringup_s2c.elf
-7d2b043ee90712b8bd971421457b1dfd  L0_bringup/checklist.html
-ca93d1d6aa1d09f3048dbaba4c311f38  L0_bringup/checklist.md
+11562cfa08101515714fe0f3dba3cbb3  L0_bringup/bringup_s2c.bin
+36bfe08b42a38ced58a3d67639551bf3  L0_bringup/bringup_s2c.elf
+5783451641927e72fe4ada95c247eb92  L0_bringup/checklist.html
+7958531f33f7f970af94f7485eb4519f  L0_bringup/checklist.md
+e29ad80cdaef45e96d6266d12395278b  L1_ame_vectors/BUILD_INFO.txt
 a3e46a8030762e24bef6bf3bf1f7be1a  L1_ame_vectors/README.html
-ba5f849f52d439475f069923bca3fbe0  L1_ame_vectors/README.md
+eb8abb778b050182bec75e9793dfc94a  L1_ame_vectors/README.md
 2cd661c6fa8e6b0de5a52a31808ee41d  L1_ame_vectors/cases/001_bf16_full_tile/a.bin
 0717d4cbaed71667469aefa420d5fb83  L1_ame_vectors/cases/001_bf16_full_tile/a.hex
 c6428881c1edae0b169face95cbf439d  L1_ame_vectors/cases/001_bf16_full_tile/b.bin
@@ -13,7 +14,7 @@ f550ec5a334b6bb0bab4ab95863eae08  L1_ame_vectors/cases/001_bf16_full_tile/c_ref.
 fc547c488ca5b76cfcc4c46fa8daafd3  L1_ame_vectors/cases/001_bf16_full_tile/meta.json
 69ce225b09489b164ae7b4320de6fa4e  L1_ame_vectors/cases/001_bf16_full_tile/prog.S
 04346ed0cf1d1b842ac955c853548c83  L1_ame_vectors/cases/001_bf16_full_tile/prog.bin
-ce5062c326a226de8a7d0ee5a3a60a74  L1_ame_vectors/cases/001_bf16_full_tile/prog.elf
+9bdf140e5effd8a5f76e21b39c7b0ae0  L1_ame_vectors/cases/001_bf16_full_tile/prog.elf
 0b9e7f41e7185ef7fbb77c92b4e2325b  L1_ame_vectors/cases/001_bf16_full_tile/prog.hex
 47adf3c510331d813288299662f6ca59  L1_ame_vectors/cases/001_bf16_full_tile/prog.ld
 4a78cd5a1d77640630e2d2d23c422e58  L1_ame_vectors/cases/002_m1_gemv/a.bin
@@ -25,7 +26,7 @@ f1ed560b94bf18a8760b51da76fcfc16  L1_ame_vectors/cases/002_m1_gemv/c_ref.hex
 3dadcf00e02b044e7f81cbca9abae3ee  L1_ame_vectors/cases/002_m1_gemv/meta.json
 911ef4f859402620bb2e108f9f47d617  L1_ame_vectors/cases/002_m1_gemv/prog.S
 ae603de732cb50bf80e26b8d31f7c7e6  L1_ame_vectors/cases/002_m1_gemv/prog.bin
-112a1cf68f5ca0d1f619207d0c11f55d  L1_ame_vectors/cases/002_m1_gemv/prog.elf
+9d32bdeb1902702ad3de208c22f3a25d  L1_ame_vectors/cases/002_m1_gemv/prog.elf
 28bee89eb43174fc9dcb7bc42b1075af  L1_ame_vectors/cases/002_m1_gemv/prog.hex
 363d7156d7333d5542f36b1225c58f3c  L1_ame_vectors/cases/002_m1_gemv/prog.ld
 cdd638ded2c88618bbf845acff5d50e1  L1_ame_vectors/cases/003_partial_m/a.bin
@@ -37,7 +38,7 @@ cdd638ded2c88618bbf845acff5d50e1  L1_ame_vectors/cases/003_partial_m/a.bin
 95ab836b9af7c9e9c14a10c2636a5aa0  L1_ame_vectors/cases/003_partial_m/meta.json
 f25cd6cd6710de852deb1b7d168fb84e  L1_ame_vectors/cases/003_partial_m/prog.S
 62cb9159471cef043ca24ad715f82e85  L1_ame_vectors/cases/003_partial_m/prog.bin
-76b0a219882a3a6bfa8dcb8c4c0dc145  L1_ame_vectors/cases/003_partial_m/prog.elf
+003ed7ad7839aab51a2157046624854a  L1_ame_vectors/cases/003_partial_m/prog.elf
 48ce8409b7fea6853128d29e003f1238  L1_ame_vectors/cases/003_partial_m/prog.hex
 aa27bbe25ec3c711edadf42de202a307  L1_ame_vectors/cases/003_partial_m/prog.ld
 d92ff72fd3a771808eac0278bf318806  L1_ame_vectors/cases/004_k_multiblock/a.bin
@@ -49,7 +50,7 @@ d92ff72fd3a771808eac0278bf318806  L1_ame_vectors/cases/004_k_multiblock/a.bin
 9a77c479273ba9030c9f34dec583dbcd  L1_ame_vectors/cases/004_k_multiblock/meta.json
 7ac2312da266cbb9fd3b9bd4f6c6be8a  L1_ame_vectors/cases/004_k_multiblock/prog.S
 554d06c336a6b25630c769a13346eb85  L1_ame_vectors/cases/004_k_multiblock/prog.bin
-ad6a8463aa04d54bcebabb8d6f892269  L1_ame_vectors/cases/004_k_multiblock/prog.elf
+850d87051fa45c8498ace8a10eece78a  L1_ame_vectors/cases/004_k_multiblock/prog.elf
 c7aefd63e0836e2ecc731cce1a8fc573  L1_ame_vectors/cases/004_k_multiblock/prog.hex
 9c22c04d2ce8da391dac43f8ca84c8a8  L1_ame_vectors/cases/004_k_multiblock/prog.ld
 75f4d2c76bf74cbd240134b52596b7ff  L1_ame_vectors/cases/005_partial_n/a.bin
@@ -61,7 +62,7 @@ c9d5ad9496161a7793c04c0040f324cb  L1_ame_vectors/cases/005_partial_n/c_ref.bin
 e3873e8c17f38bec7b39d0ff93a042fc  L1_ame_vectors/cases/005_partial_n/meta.json
 3939c72f6c2ee774defa888703c25c56  L1_ame_vectors/cases/005_partial_n/prog.S
 fcf7601e0a49e130cf190e5385ed62b6  L1_ame_vectors/cases/005_partial_n/prog.bin
-69e320fee9d3204f172ba3ba358df1e5  L1_ame_vectors/cases/005_partial_n/prog.elf
+b1d0af93deef1361b6b5ceab7b887af7  L1_ame_vectors/cases/005_partial_n/prog.elf
 cd92d5cf196ec380eee2857bc576d454  L1_ame_vectors/cases/005_partial_n/prog.hex
 91121629a1ce42ba52e6f998fc591e68  L1_ame_vectors/cases/005_partial_n/prog.ld
 62b096be4d02625231fc06941de91a65  L1_ame_vectors/cases/006_partial_k/a.bin
@@ -73,7 +74,7 @@ e7e1e2bf12ea4ac5e0e80bdbb9fbf18b  L1_ame_vectors/cases/006_partial_k/c_ref.hex
 be559ed78b43571e06e8c0442eee7bba  L1_ame_vectors/cases/006_partial_k/meta.json
 f875b8adaf15f5ee9663ff8512000bf4  L1_ame_vectors/cases/006_partial_k/prog.S
 74235993ec5742fe7f01572747cb2e77  L1_ame_vectors/cases/006_partial_k/prog.bin
-2ed81687b3015b4d10acfc7d1121c11a  L1_ame_vectors/cases/006_partial_k/prog.elf
+3036b30aa5a9873d8a6290a2ebed96ec  L1_ame_vectors/cases/006_partial_k/prog.elf
 65571b9f78955c66895674983ddd5f03  L1_ame_vectors/cases/006_partial_k/prog.hex
 bf813fce90f4cd788584ead79614acc8  L1_ame_vectors/cases/006_partial_k/prog.ld
 94f870dd15f83d04ea347d0026e38ff8  L1_ame_vectors/cases/007_stride_gap/a.bin
@@ -85,7 +86,7 @@ ba86856c7d7d9291a9cd5aef8842aa63  L1_ame_vectors/cases/007_stride_gap/c_ref.hex
 c3c8b4ab53ee92fc0b154c2d2e6b7770  L1_ame_vectors/cases/007_stride_gap/meta.json
 d3826b657af798a517892e3561d66966  L1_ame_vectors/cases/007_stride_gap/prog.S
 fa7674cd63450a0e9a26a0b761c6d054  L1_ame_vectors/cases/007_stride_gap/prog.bin
-cd2c4a02a172cac1ac11cff2e1dfbac7  L1_ame_vectors/cases/007_stride_gap/prog.elf
+402c7b6e151c9086cb0f5967120ff7e4  L1_ame_vectors/cases/007_stride_gap/prog.elf
 bf7061ea5b4c1c286eba86f79b5bec87  L1_ame_vectors/cases/007_stride_gap/prog.hex
 42397ba37c12b553ac3a1d8652cc47a2  L1_ame_vectors/cases/007_stride_gap/prog.ld
 db072a263124963e47f44124af34e587  L1_ame_vectors/cases/008_massive_act/a.bin
@@ -97,7 +98,7 @@ dedee13c7b041fdeb14266e045f942ea  L1_ame_vectors/cases/008_massive_act/c_ref.hex
 cd6b766cd3c3500efcb4e0c50c8350cf  L1_ame_vectors/cases/008_massive_act/meta.json
 01c6d7b8161f9e708a9654b2443015a9  L1_ame_vectors/cases/008_massive_act/prog.S
 b481e756079fa443060ae9aae90c1bdc  L1_ame_vectors/cases/008_massive_act/prog.bin
-d6d38737a0f01a6c1d60b91d1230bc98  L1_ame_vectors/cases/008_massive_act/prog.elf
+3d87fa6e0981537fbd60101f786e3520  L1_ame_vectors/cases/008_massive_act/prog.elf
 4005606b2de6efedc209297c3aa4e999  L1_ame_vectors/cases/008_massive_act/prog.hex
 1124bf633e4bcae7be4fd24cf922204a  L1_ame_vectors/cases/008_massive_act/prog.ld
 8080d40178039c1e39c582ac84c59b2b  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/a_src.bin
@@ -109,7 +110,7 @@ d6d38737a0f01a6c1d60b91d1230bc98  L1_ame_vectors/cases/008_massive_act/prog.elf
 8e7657e6b525bee660cf5f644d3230ad  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/meta.json
 c04cb21ded0f668d0b643b695c6ee5de  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.S
 e77e48ecebba0b75e52cd55153e2c416  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.bin
-bb236f07418401e1bed60968595b1872  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.elf
+3a977ebe6abd558a88d837f79861d3e7  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.elf
 97608b4555f05e3ce577269d52661e72  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.hex
 88499ab18b2133336a74c5bd86a2c081  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.ld
 8ac4a8f8e0ef5cb933ea3eec4dd34700  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/xor_ref.bin
@@ -123,7 +124,7 @@ f5ec75db03f1df51364b36e6561214d5  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/
 7a10f73d62f2c80764a3fdc22bf53193  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/meta.json
 1a264dd7ba6dfcda61fd300f3b83f8c7  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.S
 037d2e71727e99e8131ccf3263d345e8  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.bin
-f3d5370a91494c6adbd676087e3fa7ef  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.elf
+7a2e58b1282e721832a1ebc079f78fd9  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.elf
 6eaa6a792e374ffa42184b8f2a67d92e  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.hex
 9dca1d22c5b500d74c57031091ac7536  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.ld
 8ac4a8f8e0ef5cb933ea3eec4dd34700  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/xor_ref.bin
@@ -137,7 +138,7 @@ d4a5ce3de370a025a937f21d9cf3d601  L1_ame_vectors/cases/010_sync_sensitivity/b.bi
 2ddf1d19b1e5c047b4ba9b96d8b07967  L1_ame_vectors/cases/010_sync_sensitivity/meta.json
 ec8766bed53b8d83f7e048165fdf5273  L1_ame_vectors/cases/010_sync_sensitivity/prog.S
 a01ebdad76724c051cb810d3f7abe80e  L1_ame_vectors/cases/010_sync_sensitivity/prog.bin
-8012ddcb40acbcddced5ff8478af43e2  L1_ame_vectors/cases/010_sync_sensitivity/prog.elf
+ace0b7850a2da0eafab84a7affce0aa1  L1_ame_vectors/cases/010_sync_sensitivity/prog.elf
 838eade081fe424c13f350ad4287df15  L1_ame_vectors/cases/010_sync_sensitivity/prog.hex
 dae9cb0314d73648096ef1e1eb4f01ff  L1_ame_vectors/cases/010_sync_sensitivity/prog.ld
 43727bf3122f8ecda70e73c118f84abe  L1_ame_vectors/cases/010_sync_sensitivity/xor_ref.bin
@@ -151,7 +152,7 @@ e893de9f237a5cf218652914d6d0a87d  L1_ame_vectors/cases/011_fence_ordering/c_ref.
 3f36580c1a0c10578be89f1c4ebe41ed  L1_ame_vectors/cases/011_fence_ordering/meta.json
 c12843d629620b263813adc46a694a37  L1_ame_vectors/cases/011_fence_ordering/prog.S
 198509c2d49d23f1c273d65a8a023f05  L1_ame_vectors/cases/011_fence_ordering/prog.bin
-b0ee68fb712cd44772a1eeef36d113b3  L1_ame_vectors/cases/011_fence_ordering/prog.elf
+5cd2d501a3d09b9317f1a008b7fa0153  L1_ame_vectors/cases/011_fence_ordering/prog.elf
 52dc052b7dea08e1303b14b4fbcdf95d  L1_ame_vectors/cases/011_fence_ordering/prog.hex
 a7667920636b30a43447bc285f6c3817  L1_ame_vectors/cases/011_fence_ordering/prog.ld
 058578693f51d79babb504fb5148bf1a  L1_ame_vectors/cases/011_fence_ordering/xor_ref.bin
@@ -160,13 +161,13 @@ d469c27b89bbaaf46fd3f5bb774914f8  L1_ame_vectors/cases/011_fence_ordering/xor_re
 66fa03a33cd6f324fbeb539a3bbea515  L1_ame_vectors/golden_src/40_gen_ame_vectors.py
 5c45bb0332d2283534c232b76e3bc322  L1_ame_vectors/golden_src/41_build_vectors.sh
 01731c74e026fea57a8420c0e04ad0b5  L1_ame_vectors/index.json
-c29608c2557d39b9f305256a41e77f0f  L2_L3_fullmodel/addresses.txt
+41ae05dcc69fafe2a855c00a00b27c4e  L2_L3_fullmodel/addresses.txt
 b72fd7f5a2523a61206046184f527d7b  L2_L3_fullmodel/qwen3_s2c.bin
-a1042b4143f7a25f8b2c15fc5f054c2d  L2_L3_fullmodel/qwen3_s2c.elf
+6931c84c66dcd9ea139d48785902f27c  L2_L3_fullmodel/qwen3_s2c.elf
 9d0a96ab057b386e412d4ddaf1eecd87  L2_L3_fullmodel/tok.bin
-92a3fd4ead371f3b489a428ca55586c1  README.html
-1c411ffc91a87d58e954f74c4b2834b5  README.md
-c29608c2557d39b9f305256a41e77f0f  addresses.txt
+8961f33271eb89f8e1e071150c66fbfe  README.html
+6014216c64eb1d279eb85010bbfa156a  README.md
+41ae05dcc69fafe2a855c00a00b27c4e  addresses.txt
 671e8763be0947ded4ef3a45ef96c151  src/BUILD.md
 f2a5a6abc7b0995c7dcdfcebbc356724  src/src/Makefile
 5d550e9ebb45825897b6381e2fab91d6  src/src/bsp/board.h
