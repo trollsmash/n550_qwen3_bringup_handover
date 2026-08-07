@@ -1,0 +1,64 @@
+{
+  "case_id": "009b",
+  "name": "rvv_ame_handoff_l1d",
+  "why": "与 009a 指令序列完全相同，只把缓存维护换成 xdcache 的全量指令\n（l1d_clean_all / l1d_inv_all）。\n两个变体都要过：软件侧 QEMU 走 cbo、真机走 l1d_*_all，\nRTL 若只实现其中一套，我们要到上板那天才会发现。\n注意 l1d_inv_all 会丢弃脏行，故程序里它前面必有 l1d_clean_all。",
+  "mixed": true,
+  "kind": "handoff",
+  "cache_ops": "xdcache l1d_clean_all/l1d_inv_all",
+  "march_needs": "_xdcache",
+  "dtype": {
+    "a_src": "fp32",
+    "a": "bf16 (RVV 运行时生成)",
+    "b": "bf16",
+    "c": "fp32"
+  },
+  "shape": {
+    "M": 32,
+    "N": 128,
+    "K": 256
+  },
+  "tile": {
+    "mtilem": 32,
+    "mtilen": 128,
+    "mtilek": 32,
+    "n_mfmacc": 8
+  },
+  "segments": {
+    "text": "0x80000000",
+    "a": "0x80001000",
+    "b": "0x80050000",
+    "c": "0x800A0000",
+    "ref": "0x800B0000",
+    "done": "0x800C0000",
+    "status": "0x800C0004",
+    "failidx": "0x800C0008",
+    "a_src": "0x800D0000",
+    "xor": "0x80160000",
+    "xor_ref": "0x80160004",
+    "stage_a": "0x80160008",
+    "stage_b": "0x8016000C",
+    "probe1": "0x80160010",
+    "probe2": "0x80160014",
+    "probe_eq": "0x80160018",
+    "trap_cause": "0x8016001C",
+    "trap_epc": "0x80160020",
+    "trap_tval": "0x80160024"
+  },
+  "markers": {
+    "done_magic": "0x600D600D",
+    "status_pass": "0x50415353",
+    "status_fail": "0x4641494C",
+    "c_preset": "0xA5A5A5A5",
+    "a_preset": "0x5A5A"
+  },
+  "xor_ref": "0x002730B4",
+  "verdict": "看 status 与 stage_a/stage_b",
+  "stride_bytes": {
+    "a": 512,
+    "b": 512,
+    "c": 512
+  },
+  "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+  "rounding": "block-exact then FP32 RNE per K-block of 32; FP32->BF16 by RNE (frm=0)",
+  "seed": "0xA3E00009"
+}

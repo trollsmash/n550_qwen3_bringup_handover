@@ -82,12 +82,29 @@ td code, th code { white-space:nowrap; }
 <div class='tablewrap'><table><thead><tr><th>地址</th><th>含义</th></tr></thead><tbody><tr><td><code>0x800C_0000</code></td><td>计算完成标志。等它变成 <code>0x600D600D</code></td></tr><tr><td><code>0x800C_0004</code></td><td>程序自检结果：<code>0x50415353</code>(<code>PASS</code>) / <code>0x4641494C</code>(<code>FAIL</code>)</td></tr><tr><td><code>0x800C_0008</code></td><td>首个不符元素的下标；全对时为 <code>-1</code></td></tr><tr><td><code>0x800A_0000</code></td><td>结果矩阵 C 的起始地址</td></tr></tbody></table></div>
 <p><strong>自检是附赠的，不是必须用的。</strong> 镜像里带了一份期望值，程序算完会自己比一遍。 你也可以完全无视它，只等 <code>0x800C_0000</code> 的魔数，然后 dump C 区自己比对：</p>
 <pre><code>python3 check.py 001 你dump出来的.hex</code></pre>
-<p>八个 case 的地址表<strong>完全一致</strong>，testbench 写一次就够，换 case 只换 <code>prog.hex</code>。</p>
+<p>所有 case 的地址表<strong>完全一致</strong>，testbench 写一次就够，换 case 只换 <code>prog.hex</code>。 混合 case（009+）多用了几个字段，见下面第二·五节，地址同样固定。</p>
 <hr>
 <h2>二、Case 清单</h2>
-<p>按顺序跑。<strong>001 不过就别看后面的</strong>——它失败说明是根本性问题。</p>
-<div class='tablewrap'><table><thead><tr><th>#</th><th>名称</th><th>M</th><th>N</th><th>K</th><th>mfmacc 条数</th><th>为什么有这一条</th></tr></thead><tbody><tr><td>001</td><td>bf16_full_tile</td><td>128</td><td>128</td><td>32</td><td>1</td><td>满 tile 基线，覆盖 16384 个输出的完整通路</td></tr><tr><td>002</td><td>m1_gemv</td><td>1</td><td>128</td><td>1024</td><td>32</td><td>LLM 逐 token 生成时的真实形状，tile 只填 1/128</td></tr><tr><td>003</td><td>partial_m</td><td>7</td><td>128</td><td>32</td><td>1</td><td>M 非 2 的幂。用 7 是为了让隐式的 2 的幂假设立刻失效</td></tr><tr><td>004</td><td>k_multiblock</td><td>128</td><td>128</td><td>256</td><td>8</td><td>多条 mfmacc 累加进同一累加器，验块间舍入</td></tr><tr><td>005</td><td>partial_n</td><td>128</td><td>13</td><td>32</td><td>1</td><td>N 方向的部分 tile 与 M 方向走不同路径，须分开验</td></tr><tr><td>006</td><td>partial_k</td><td>128</td><td>128</td><td>17</td><td>1</td><td>K 不满一块。剩余乘法单元必须贡献 0 而非残留值</td></tr><tr><td>007</td><td>stride_gap</td><td>128</td><td>128</td><td>32</td><td>1</td><td>A/B 行 stride 大于列数。忽略 stride 的实现只在这里错</td></tr><tr><td>008</td><td>massive_act</td><td>128</td><td>128</td><td>1024</td><td>32</td><td>真实数值分布 + ±6912 outlier，压测动态范围与 32 次累加</td></tr></tbody></table></div>
-<p>规模提示：001/004/006/007 的镜像 786 KB；002/003/005 略小； 008 的 K=1024 意味着 32 轮 tile 装载，仿真时间最长，建议放最后。</p>
+<p>分两组，<strong>先把第一组全部跑绿，再碰第二组</strong>。</p>
+<h3>第一组：纯 AME（001–008）</h3>
+<p>只有 AME 与标量指令，<strong>完全不依赖 cache 行为</strong>——数据由 testbench 直接装进内存。 这是它们的价值所在：<strong>cache 子系统还没做好时，矩阵单元本身的正确性照样能验</strong>。</p>
+<div class='tablewrap'><table><thead><tr><th>#</th><th>名称</th><th>M</th><th>N</th><th>K</th><th>mfmacc</th><th>为什么有这一条</th></tr></thead><tbody><tr><td>001</td><td>bf16_full_tile</td><td>128</td><td>128</td><td>32</td><td>1</td><td>满 tile 基线，覆盖 16384 个输出的完整通路</td></tr><tr><td>002</td><td>m1_gemv</td><td>1</td><td>128</td><td>1024</td><td>32</td><td>LLM 逐 token 生成时的真实形状，tile 只填 1/128</td></tr><tr><td>003</td><td>partial_m</td><td>7</td><td>128</td><td>32</td><td>1</td><td>M 非 2 的幂。用 7 是为了让隐式的 2 的幂假设立刻失效</td></tr><tr><td>004</td><td>k_multiblock</td><td>128</td><td>128</td><td>256</td><td>8</td><td>多条 mfmacc 累加进同一累加器，验块间舍入</td></tr><tr><td>005</td><td>partial_n</td><td>128</td><td>13</td><td>32</td><td>1</td><td>N 方向的部分 tile 与 M 方向走不同路径，须分开验</td></tr><tr><td>006</td><td>partial_k</td><td>128</td><td>128</td><td>17</td><td>1</td><td>K 不满一块。剩余乘法单元必须贡献 0 而非残留值</td></tr><tr><td>007</td><td>stride_gap</td><td>128</td><td>128</td><td>32</td><td>1</td><td>A/B 行 stride 大于列数。忽略 stride 的实现只在这里错</td></tr><tr><td>008</td><td>massive_act</td><td>128</td><td>128</td><td>1024</td><td>32</td><td>真实数值分布 + ±6912 outlier，压测动态范围与 32 次累加</td></tr></tbody></table></div>
+<p><strong>001 不过就别看后面的</strong>——它失败说明是根本性问题。 008 的 K=1024 意味着 32 轮 tile 装载，仿真最慢，建议放这一组最后。</p>
+<h3>第二组：RVV 与 AME 混合（009–011）</h3>
+<p>引入 RVV、缓存同步与访存定序。真实负载就长这样：模型每层要在 RVV 与 AME 之间来回交接七次。</p>
+<div class='tablewrap'><table><thead><tr><th>#</th><th>名称</th><th>验什么</th><th>判据</th></tr></thead><tbody><tr><td>009a</td><td>rvv_ame_handoff_cbo</td><td>双向交接，缓存用 <strong>Zicbom</strong>（<code>cbo.clean</code>/<code>cbo.inval</code>）</td><td><code>status</code> + <code>stage_a</code>/<code>stage_b</code></td></tr><tr><td>009b</td><td>rvv_ame_handoff_l1d</td><td>同上，缓存换成 <strong>xdcache</strong> 全量（<code>l1d_clean_all</code>/<code>l1d_inv_all</code>）</td><td>同上</td></tr><tr><td>010</td><td>sync_sensitivity</td><td>同一计算带同步/不带同步各做一遍</td><td><strong>只看 <code>status</code></strong>，两个 probe 是观察项</td></tr><tr><td>011</td><td>fence_ordering</td><td>AME 写完立刻读，带 <code>fence</code>/不带各一次</td><td><strong>只看 <code>status</code></strong>，同上</td></tr></tbody></table></div>
+<p><strong>009 为什么有两个变体</strong>：软件侧 QEMU 走 <code>cbo.*</code>、真机走 <code>l1d_*_all</code>。 如果 RTL 只实现了其中一套，我们要到上板那天才会发现。两个都要过。</p>
+<blockquote><p><code>009b</code> 在 QEMU 上跑不了——<code>l1d_clean_all</code> 在那里是非法指令（实测 <code>mtval=0x0010702b</code>）。 这是预期行为，不是缺陷。</p></blockquote>
+<h2>二·五、混合 case 的判读</h2>
+<p>除通用的 <code>done</code> / <code>status</code> 外，多出这几个字（地址见各 case 的 <code>meta.json</code> 的 <code>segments</code>）：</p>
+<div class='tablewrap'><table><thead><tr><th>字段</th><th>含义</th></tr></thead><tbody><tr><td><code>stage_a</code></td><td>阶段 A（RVV 写 → clean → AME 读）完成标志</td></tr><tr><td><code>stage_b</code></td><td>阶段 B（AME 写 → inval → RVV 读）完成标志</td></tr><tr><td><code>xor</code> / <code>xor_ref</code></td><td>RVV 对 C 做的 XOR 校验和及其期望值</td></tr><tr><td><code>probe1</code> / <code>probe2</code></td><td>010/011 的两次结果</td></tr><tr><td><code>probe_eq</code></td><td>两次是否相同：1=相同 0=不同</td></tr><tr><td><code>trap_cause</code> / <code>trap_epc</code> / <code>trap_tval</code></td><td>异常信息，正常时全 0</td></tr></tbody></table></div>
+<p><strong>拆成 <code>stage_a</code>/<code>stage_b</code> 两段是有意的</strong>：整条链只报一个 PASS/FAIL 的话， 失败时分不清是 clean 没把数据写回 DDR，还是 inval 没把旧拷贝清掉—— 这在 RTL 里是两处不同的实现。</p>
+<ul><li><code>stage_a</code> 未置位 ⇒ 卡在 RVV→AME 方向，多半是 <strong>clean 没生效</strong>，AME 读到了旧值</li><li><code>stage_b</code> 未置位或 <code>xor</code> 不符 ⇒ 卡在 AME→RVV 方向，多半是 <strong>inval 没生效</strong>，RVV 命中了 L1D 里的旧拷贝</li></ul>
+<p>校验和用 XOR 而不是浮点求和，是因为 RVV 的归约顺序是实现定义的： 浮点求和会因归约树不同给出不同低位，期望值根本没法定。XOR 可交换可结合， 任意归约顺序都得到同一个值，判据才能是 bit-exact。</p>
+<h3>⚠ 关于 010 和 011 的观察项</h3>
+<p><code>probe2</code>（不带同步 / 不带 fence 那次）<strong>永远不作判据</strong>。它的结果依赖 cache 当时的状态、流水线时序、写缓冲深度，当判据只会得到随机的红绿灯。</p>
+<ul><li><strong>两次不同</strong> ⇒ 证明软件同步确实必要，且软件用的序列确实有效</li><li><strong>两次相同</strong> ⇒ <strong>不能推出&quot;不需要同步&quot;</strong>。可能只是数据恰好没驻留 cache， 或恰好没撞上时序窗口</li></ul>
+<p><strong>请不要拿&quot;不加同步也过了&quot;去论证软件可以省掉同步</strong>——那是最危险的误读。 （在 QEMU 上 011 的两次就是相同的，因为它根本不模拟写缓冲时序。）</p>
 <hr>
 <h2>三、数据布局（最容易搞错的地方）</h2>
 <pre><code>C[M][N] = A[M][K] · B[N][K]ᵀ          全部行主序</code></pre>
@@ -105,7 +122,7 @@ td code, th code { white-space:nowrap; }
 <pre><code>for 每个 K 块（32 个元素）:
     块和 = Σ A[m,k] × B[n,k]        # 精确，零误差
     acc  = fp32_rne(acc + 块和)      # 每块结束舍入一次</code></pre>
-<p>这三条已用 QEMU 交叉验证：8 个 case 共 <strong>84608 个输出元素，逐位相同，零 ULP 偏差</strong>。 所以规范本身是可信的；如果你的 RTL 对不上，先怀疑 RTL。</p>
+<p>这三条已用 QEMU 交叉验证：纯 AME 的 8 个 case 共 <strong>84608 个输出元素，逐位相同，零 ULP 偏差</strong>。 混合 case 另在 QEMU 上实跑验证过（009a/010/011 全部 PASS，XOR 校验和与参考值一致）。 所以规范本身是可信的；如果你的 RTL 对不上，先怀疑 RTL。</p>
 <hr>
 <h2>五、判据</h2>
 <p><strong>bit-exact。</strong> 逐位相同才算过。</p>
@@ -132,10 +149,13 @@ cases/&lt;id&gt;_&lt;name&gt;/
     prog.elf                   带符号，可用 objdump -d 看指令流
     prog.bin                   从基址起的连续内存镜像
     prog.hex                   同上，每行 32 bit ← testbench 用这个
-    a.hex / a.bin              A 矩阵单独的镜像
+    a.hex / a.bin              A 矩阵单独的镜像（纯 AME case）
     b.hex / b.bin              B 矩阵
     c_ref.hex / c_ref.bin      期望结果
-    meta.json                  形状、CSR、stride、地址表、markers</code></pre>
+    meta.json                  形状、CSR、stride、地址表、markers
+    -- 以下仅混合 case（009+）--
+    a_src.hex / a_src.bin      FP32 源激活；A 由程序用 RVV 在运行时生成
+    xor_ref.hex / xor_ref.bin  C 的 XOR 校验和期望值</code></pre>
 <hr>
 <h2>九、需要改基址 / 加 case 的话</h2>
 <p>生成器就在包里（<code>golden_src/</code>），本包是自包含的，不需要上层项目。</p>
@@ -149,7 +169,7 @@ golden_src/41_build_vectors.sh</code></pre>
 <hr>
 <h2>十、还没覆盖的</h2>
 <p>诚实说明，避免误以为这包验完就万事大吉：</p>
-<ul><li><strong>INT8×INT8→INT32 未覆盖</strong>（本包只有 BF16）。硬件支持 INT8 且 K=64， 但上层项目走的是 BF16 路线，没有可信的参考实现，硬造风险更大。需要的话可以补。</li><li><strong>Inf / NaN / 非规格化数未覆盖。</strong> 需要先和架构组确认这些输入下的期望行为， 规范不明确时造出来的向量只会制造争议。</li><li><strong>时序、背靠背发射、accumulator 冲突未覆盖。</strong> 本包验的是数值正确性， 流水线相关的验证需要另一类激励。</li><li><strong><code>mrelease</code> 的语义未单独验证</strong>，只在每个 case 末尾出现一次。</li></ul>
+<ul><li><strong>RVV 与 AME 的并发执行未覆盖</strong>：009-011 验的是顺序交接（一方做完另一方再开始）， 没有验 AME 计算期间 CPU 同时跑 RVV 的情形。若硬件允许两者重叠，那是另一类激励。</li><li><strong>INT8×INT8→INT32 未覆盖</strong>（本包只有 BF16）。硬件支持 INT8 且 K=64， 但上层项目走的是 BF16 路线，没有可信的参考实现，硬造风险更大。需要的话可以补。</li><li><strong>Inf / NaN / 非规格化数未覆盖。</strong> 需要先和架构组确认这些输入下的期望行为， 规范不明确时造出来的向量只会制造争议。</li><li><strong>时序、背靠背发射、accumulator 冲突未覆盖。</strong> 本包验的是数值正确性， 流水线相关的验证需要另一类激励。</li><li><strong><code>mrelease</code> 的语义未单独验证</strong>，只在每个 case 末尾出现一次。</li></ul>
 <p>有问题直接找软件侧，把 <code>check.py</code> 的完整输出带上。</p>
 <p class="meta">由 tools/42_md2html.py 从 README.md 生成。
 内容以 Markdown 源文件为准；改了源文件请重新生成本页。</p>

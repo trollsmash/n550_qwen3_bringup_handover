@@ -1,0 +1,3 @@
+// case 010 sync_sensitivity - XOR checksum of all C words
+// 1 words, 32-bit each, little-endian memory image
+0740bef8

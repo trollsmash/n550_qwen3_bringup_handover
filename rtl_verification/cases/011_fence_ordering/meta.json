@@ -1,0 +1,64 @@
+{
+  "case_id": "011",
+  "name": "fence_ordering",
+  "why": "验证硬件团队的断言：fence rw,rw 覆盖 AME 的访存缓冲，\nfence 退休即代表 AME 的写已落到 DDR。\nAME 写完后立刻读同一地址，带 fence 与不带各做一次并回填结果。\n★ 不带 fence 的那次同样不作判据：结果依赖流水线时序与写缓冲深度，\n  当判据只会得到随机的红绿灯。软件的正确性完全建立在这条断言上，\n  所以它需要被验证，而不是被假定。",
+  "mixed": true,
+  "kind": "fence_ordering",
+  "cache_ops": "Zicbom cbo.clean/cbo.inval",
+  "march_needs": "_zicbom",
+  "dtype": {
+    "a_src": "fp32",
+    "a": "bf16 (RVV 运行时生成)",
+    "b": "bf16",
+    "c": "fp32"
+  },
+  "shape": {
+    "M": 32,
+    "N": 128,
+    "K": 256
+  },
+  "tile": {
+    "mtilem": 32,
+    "mtilen": 128,
+    "mtilek": 32,
+    "n_mfmacc": 8
+  },
+  "segments": {
+    "text": "0x80000000",
+    "a": "0x80001000",
+    "b": "0x80050000",
+    "c": "0x800A0000",
+    "ref": "0x800B0000",
+    "done": "0x800C0000",
+    "status": "0x800C0004",
+    "failidx": "0x800C0008",
+    "a_src": "0x800D0000",
+    "xor": "0x80160000",
+    "xor_ref": "0x80160004",
+    "stage_a": "0x80160008",
+    "stage_b": "0x8016000C",
+    "probe1": "0x80160010",
+    "probe2": "0x80160014",
+    "probe_eq": "0x80160018",
+    "trap_cause": "0x8016001C",
+    "trap_epc": "0x80160020",
+    "trap_tval": "0x80160024"
+  },
+  "markers": {
+    "done_magic": "0x600D600D",
+    "status_pass": "0x50415353",
+    "status_fail": "0x4641494C",
+    "c_preset": "0xA5A5A5A5",
+    "a_preset": "0x5A5A"
+  },
+  "xor_ref": "0x00A88470",
+  "verdict": "status 为判据；probe1/probe2/probe_eq 仅为观察项，不判成败",
+  "stride_bytes": {
+    "a": 512,
+    "b": 512,
+    "c": 512
+  },
+  "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+  "rounding": "block-exact then FP32 RNE per K-block of 32; FP32->BF16 by RNE (frm=0)",
+  "seed": "0xA3E0000B"
+}

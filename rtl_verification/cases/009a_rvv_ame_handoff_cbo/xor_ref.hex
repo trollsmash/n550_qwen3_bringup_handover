@@ -1,0 +1,3 @@
+// case 009a rvv_ame_handoff_cbo - XOR checksum of all C words
+// 1 words, 32-bit each, little-endian memory image
+002730b4

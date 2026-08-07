@@ -1,0 +1,64 @@
+{
+  "case_id": "010",
+  "name": "sync_sensitivity",
+  "why": "同一计算做两遍：第一遍带完整同步，第二遍故意去掉所有 cache 操作，\n把两次的 XOR 校验和都回填，并给出是否相同。\n★ 第二遍不作判据 —— 它依赖 cache 当时的状态，通过与否都不能证明什么。\n  两次不同 => 证明软件同步确实必要、序列也确实有效\n  两次相同 => **不能**推出'不需要同步'，可能只是数据恰好未驻留 cache\n它把'到底需不需要软件维护一致性'从口头约定变成可测量的事实。",
+  "mixed": true,
+  "kind": "sync_sensitivity",
+  "cache_ops": "Zicbom cbo.clean/cbo.inval",
+  "march_needs": "_zicbom",
+  "dtype": {
+    "a_src": "fp32",
+    "a": "bf16 (RVV 运行时生成)",
+    "b": "bf16",
+    "c": "fp32"
+  },
+  "shape": {
+    "M": 32,
+    "N": 128,
+    "K": 256
+  },
+  "tile": {
+    "mtilem": 32,
+    "mtilen": 128,
+    "mtilek": 32,
+    "n_mfmacc": 8
+  },
+  "segments": {
+    "text": "0x80000000",
+    "a": "0x80001000",
+    "b": "0x80050000",
+    "c": "0x800A0000",
+    "ref": "0x800B0000",
+    "done": "0x800C0000",
+    "status": "0x800C0004",
+    "failidx": "0x800C0008",
+    "a_src": "0x800D0000",
+    "xor": "0x80160000",
+    "xor_ref": "0x80160004",
+    "stage_a": "0x80160008",
+    "stage_b": "0x8016000C",
+    "probe1": "0x80160010",
+    "probe2": "0x80160014",
+    "probe_eq": "0x80160018",
+    "trap_cause": "0x8016001C",
+    "trap_epc": "0x80160020",
+    "trap_tval": "0x80160024"
+  },
+  "markers": {
+    "done_magic": "0x600D600D",
+    "status_pass": "0x50415353",
+    "status_fail": "0x4641494C",
+    "c_preset": "0xA5A5A5A5",
+    "a_preset": "0x5A5A"
+  },
+  "xor_ref": "0x0740BEF8",
+  "verdict": "status 为判据；probe1/probe2/probe_eq 仅为观察项，不判成败",
+  "stride_bytes": {
+    "a": 512,
+    "b": 512,
+    "c": 512
+  },
+  "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+  "rounding": "block-exact then FP32 RNE per K-block of 32; FP32->BF16 by RNE (frm=0)",
+  "seed": "0xA3E0000A"
+}
