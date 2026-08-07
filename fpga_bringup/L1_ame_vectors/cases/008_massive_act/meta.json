@@ -1,0 +1,64 @@
+{
+  "case_id": "008",
+  "name": "massive_act",
+  "why": "Qwen3 深层实测的真实数值分布：多数元素在 1 附近，少数维度出现 ±6912 的 outlier（Transformer 深层的已知现象）。K=1024 为真实值。这条同时压测动态范围与 32 次连续累加，最接近硬件在真机上的实际负载。",
+  "dtype": {
+    "a": "bf16",
+    "b": "bf16",
+    "c": "fp32"
+  },
+  "shape": {
+    "M": 128,
+    "N": 128,
+    "K": 1024
+  },
+  "tile": {
+    "mtilem": 128,
+    "mtilen": 128,
+    "mtilek": 32,
+    "n_mfmacc": 32
+  },
+  "segments": {
+    "text": "0x80000000",
+    "a": "0x80001000",
+    "b": "0x80050000",
+    "c": "0x800A0000",
+    "ref": "0x800B0000",
+    "done": "0x800C0000",
+    "status": "0x800C0004",
+    "failidx": "0x800C0008"
+  },
+  "markers": {
+    "done_magic": "0x600D600D",
+    "status_pass": "0x50415353",
+    "status_fail": "0x4641494C",
+    "c_preset": "0xA5A5A5A5"
+  },
+  "csr": {
+    "mtilem": "0x803",
+    "mtilen": "0x804",
+    "mtilek": "0x805"
+  },
+  "stride_bytes": {
+    "a": 2048,
+    "b": 2048,
+    "c": 512
+  },
+  "stride_elems": {
+    "a": 1024,
+    "b": 1024,
+    "c": 128
+  },
+  "row_gap_elems": {
+    "a": 0,
+    "b": 0
+  },
+  "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+  "rounding": "block-exact then FP32 RNE per K-block of 32",
+  "words": {
+    "a": 65536,
+    "b": 65536,
+    "c": 16384
+  },
+  "seed": "0xA3E00008"
+}

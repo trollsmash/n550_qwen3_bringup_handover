@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AME 矩阵扩展 — RTL 验证向量包 v1</title>
+<style>
+:root {
+  --bg:#ffffff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0;
+  --code-bg:#f6f8fa; --code-fg:#1f2328; --accent:#0969da;
+  --quote-bar:#d1d9e0; --th-bg:#f6f8fa; --mark:#fff8c5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#3d444d;
+    --code-bg:#161b22; --code-fg:#e6edf3; --accent:#4493f8;
+    --quote-bar:#3d444d; --th-bg:#161b22; --mark:#3f2e00;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; padding:2.5rem 1.25rem 6rem; background:var(--bg); color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",
+              "PingFang SC","Hiragino Sans GB",sans-serif;
+  font-size:16px; line-height:1.7;
+  -webkit-text-size-adjust:100%;
+}
+main { max-width:900px; margin:0 auto; }
+h1,h2,h3 { line-height:1.3; margin:2.2em 0 .8em; font-weight:600; }
+h1 { font-size:1.9rem; margin-top:0; padding-bottom:.35em; border-bottom:1px solid var(--line); }
+h2 { font-size:1.4rem; padding-bottom:.3em; border-bottom:1px solid var(--line); }
+h3 { font-size:1.15rem; }
+p { margin:.9em 0; }
+a { color:var(--accent); text-decoration:none; }
+a:hover { text-decoration:underline; }
+hr { border:0; border-top:1px solid var(--line); margin:2.5em 0; }
+strong { font-weight:650; }
+code {
+  background:var(--code-bg); color:var(--code-fg); border-radius:5px;
+  padding:.15em .38em; font-size:.88em;
+  font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+pre {
+  background:var(--code-bg); border:1px solid var(--line); border-radius:8px;
+  padding:.9rem 1rem; overflow-x:auto; margin:1.1em 0; line-height:1.55;
+}
+pre code { background:none; padding:0; font-size:.85rem; }
+blockquote {
+  margin:1.2em 0; padding:.15em 1.1em; color:var(--muted);
+  border-left:4px solid var(--quote-bar);
+}
+blockquote p { margin:.6em 0; }
+ul,ol { margin:.9em 0; padding-left:1.6em; }
+li { margin:.4em 0; }
+li > p { margin:.35em 0; }
+/* 宽表格自己横向滚动，页面本身绝不横向滚动 */
+.tablewrap { overflow-x:auto; margin:1.3em 0; }
+table { border-collapse:collapse; width:100%; font-size:.93rem; }
+th,td { border:1px solid var(--line); padding:.5em .75em; text-align:left; vertical-align:top; }
+th { background:var(--th-bg); font-weight:650; white-space:nowrap; }
+td code, th code { white-space:nowrap; }
+.meta { color:var(--muted); font-size:.85rem; margin-top:3rem;
+        padding-top:1rem; border-top:1px solid var(--line); }
+@media print {
+  body { padding:0; font-size:11pt; }
+  pre,.tablewrap { break-inside:avoid; }
+  h1,h2,h3 { break-after:avoid; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>AME 矩阵扩展 — RTL 验证向量包 v1</h1>
+<p>面向 <strong>RTL 验证</strong>。你不需要了解上层的 LLM 项目，也不需要装它的软件环境。</p>
+<p>每个 case 是一段<strong>能自己跑起来的最小裸机程序</strong>：算完把结果写到固定地址， 再往一个标志地址写魔数。你的 testbench 只要&quot;装镜像 → 放复位 → 等标志 → dump 内存&quot;。</p>
+<hr>
+<h2>一、5 分钟跑通</h2>
+<pre><code>cases/001_bf16_full_tile/prog.hex     ← 装进内存，起始地址 0x8000_0000</code></pre>
+<p><code>prog.hex</code> 是<strong>从基址开始的完整连续内存镜像</strong>，每行一个 32 位小端字， <code>$readmemh</code> 直接可读。代码、A、B、C、期望值全在里面，一次装载就位。</p>
+<pre><code>$readmemh(&quot;prog.hex&quot;, mem);        // mem[0] 对应物理地址 0x8000_0000</code></pre>
+<p>放开复位，然后轮询：</p>
+<div class='tablewrap'><table><thead><tr><th>地址</th><th>含义</th></tr></thead><tbody><tr><td><code>0x800C_0000</code></td><td>计算完成标志。等它变成 <code>0x600D600D</code></td></tr><tr><td><code>0x800C_0004</code></td><td>程序自检结果：<code>0x50415353</code>(<code>PASS</code>) / <code>0x4641494C</code>(<code>FAIL</code>)</td></tr><tr><td><code>0x800C_0008</code></td><td>首个不符元素的下标；全对时为 <code>-1</code></td></tr><tr><td><code>0x800A_0000</code></td><td>结果矩阵 C 的起始地址</td></tr></tbody></table></div>
+<p><strong>自检是附赠的，不是必须用的。</strong> 镜像里带了一份期望值，程序算完会自己比一遍。 你也可以完全无视它，只等 <code>0x800C_0000</code> 的魔数，然后 dump C 区自己比对：</p>
+<pre><code>python3 check.py 001 你dump出来的.hex</code></pre>
+<p>八个 case 的地址表<strong>完全一致</strong>，testbench 写一次就够，换 case 只换 <code>prog.hex</code>。</p>
+<hr>
+<h2>二、Case 清单</h2>
+<p>按顺序跑。<strong>001 不过就别看后面的</strong>——它失败说明是根本性问题。</p>
+<div class='tablewrap'><table><thead><tr><th>#</th><th>名称</th><th>M</th><th>N</th><th>K</th><th>mfmacc 条数</th><th>为什么有这一条</th></tr></thead><tbody><tr><td>001</td><td>bf16_full_tile</td><td>128</td><td>128</td><td>32</td><td>1</td><td>满 tile 基线，覆盖 16384 个输出的完整通路</td></tr><tr><td>002</td><td>m1_gemv</td><td>1</td><td>128</td><td>1024</td><td>32</td><td>LLM 逐 token 生成时的真实形状，tile 只填 1/128</td></tr><tr><td>003</td><td>partial_m</td><td>7</td><td>128</td><td>32</td><td>1</td><td>M 非 2 的幂。用 7 是为了让隐式的 2 的幂假设立刻失效</td></tr><tr><td>004</td><td>k_multiblock</td><td>128</td><td>128</td><td>256</td><td>8</td><td>多条 mfmacc 累加进同一累加器，验块间舍入</td></tr><tr><td>005</td><td>partial_n</td><td>128</td><td>13</td><td>32</td><td>1</td><td>N 方向的部分 tile 与 M 方向走不同路径，须分开验</td></tr><tr><td>006</td><td>partial_k</td><td>128</td><td>128</td><td>17</td><td>1</td><td>K 不满一块。剩余乘法单元必须贡献 0 而非残留值</td></tr><tr><td>007</td><td>stride_gap</td><td>128</td><td>128</td><td>32</td><td>1</td><td>A/B 行 stride 大于列数。忽略 stride 的实现只在这里错</td></tr><tr><td>008</td><td>massive_act</td><td>128</td><td>128</td><td>1024</td><td>32</td><td>真实数值分布 + ±6912 outlier，压测动态范围与 32 次累加</td></tr></tbody></table></div>
+<p>规模提示：001/004/006/007 的镜像 786 KB；002/003/005 略小； 008 的 K=1024 意味着 32 轮 tile 装载，仿真时间最长，建议放最后。</p>
+<hr>
+<h2>三、数据布局（最容易搞错的地方）</h2>
+<pre><code>C[M][N] = A[M][K] · B[N][K]ᵀ          全部行主序</code></pre>
+<p><strong>B 是 <code>[N,K]</code> 不是 <code>[K,N]</code>。</strong> 装载时 A 按 <code>mtilem × mtilek</code>，B 按 <code>mtilen × mtilek</code>。 这不是笔误：<code>[N,K]</code> 正好是 PyTorch 权重 <code>[out_features, in_features]</code> 的布局， 所以软件侧一次重排都不需要。</p>
+<p><code>a.hex</code> / <code>b.hex</code> / <code>c_ref.hex</code> 是各矩阵单独的内存镜像，格式同样是每行 32 位小端字：</p>
+<ul><li><code>a.hex</code>、<code>b.hex</code> —— 一行装两个 BF16，<strong>低 16 位是下标偶数的那个</strong></li><li><code>c_ref.hex</code> —— 一行一个 FP32 位模式</li></ul>
+<p>行 stride 见 <code>meta.json</code> 的 <code>stride_bytes</code>。<strong>注意 007 的 stride 大于实际列数</strong>， 行与行之间有空隙，必须严格按 stride 寻址。</p>
+<p>指令序列直接看 <code>prog.S</code>，它是完全展开的——没有循环，没有分支， 除了 tile 装载、<code>mfmacc</code> 和几条 <code>li</code> 之外什么都没有，波形能逐条对上。</p>
+<hr>
+<h2>四、期望值是怎么来的</h2>
+<p><strong>不是从另一个模拟器抄的。</strong> 参考值由架构语义推导（<code>tools/40_gen_ame_vectors.py</code>）， 理由是：拿一个实现去验另一个实现，两边的错误会互相掩盖。 我们用的 QEMU 模型就被证实存在缺陷（<code>mzero</code> 曾只清累加器前 64 行）。</p>
+<p>参考模型只有三条规则，实测确定：</p>
+<ol><li><strong>单条 <code>mfmacc</code> 内部，K 维累加精度宽于 FP32。</strong> 构造 <code>A=[2²⁴, 1×31]</code>、<code>B=全1</code> 时，31 个 <code>1.0</code> 一个都没被吞掉—— 若是 FP32 逐项累加它们会全部消失。所以块内按精确有理数求和，最后才舍入。</li><li><strong>跨多条 <code>mfmacc</code> 时，累加器中间值落回 FP32。</strong> 第二条 <code>mfmacc</code> 贡献的 <code>1.0</code>（远小于该量级 1 ULP=2）被整个吞掉。 所以按 K=32 分块，<strong>块间按 FP32 舍入后再累加</strong>。</li><li><strong>舍入按 IEEE RNE</strong>（最近偶数）。</li></ol>
+<p>写成代码就是：</p>
+<pre><code>for 每个 K 块（32 个元素）:
+    块和 = Σ A[m,k] × B[n,k]        # 精确，零误差
+    acc  = fp32_rne(acc + 块和)      # 每块结束舍入一次</code></pre>
+<p>这三条已用 QEMU 交叉验证：8 个 case 共 <strong>84608 个输出元素，逐位相同，零 ULP 偏差</strong>。 所以规范本身是可信的；如果你的 RTL 对不上，先怀疑 RTL。</p>
+<hr>
+<h2>五、判据</h2>
+<p><strong>bit-exact。</strong> 逐位相同才算过。</p>
+<p>唯一的例外：真值恰好落在两个相邻 FP32 正中间时，允许差 1 ULP。 <code>check.py</code> 会把这种情况单独统计并标注，不计入失败。</p>
+<blockquote><p>已知问题：我们用的 QEMU 模型在这种中点情形下<strong>舍入方向不稳定</strong>—— 同一份数据两次执行会给出 <code>16777246</code> 和 <code>16777248</code> 两个不同结果。 这是 QEMU 的缺陷，不代表架构语义。如果你的 RTL 在中点上与参考值差 1 ULP， 这是需要和架构组确认的点，不是 RTL bug。</p></blockquote>
+<hr>
+<h2>六、三条硬约束（都是踩出来的）</h2>
+<ol><li><strong><code>mstatus.MS</code>（bit 30:29）必须使能</strong>，否则所有 AME 指令报 illegal instruction。 现象与&quot;指令编码不支持&quot;一模一样，极容易误判成译码问题。 <code>prog.S</code> 开头已经设好了 <code>FS | VS | MS</code>。</li><li><strong>tile 装载会读满整个 tile 的地址范围</strong>，即使 <code>mtilem=1</code> 也一样。 给 A/B 分配缓冲时尾部必须留出余量（我们用 8 KB）， 按有效数据大小紧贴分配会读到非法地址。 如果你的 testbench 在 A/B 之后立刻放了别的东西，注意这一条。</li><li><strong><code>frm</code> 要显式写。</strong> 参考值按 RNE 生成，<code>prog.S</code> 里有 <code>csrw frm, x0</code>。 不写就得看复位默认值，各家实现不一定相同。</li></ol>
+<hr>
+<h2>七、对不上的时候</h2>
+<pre><code>python3 check.py &lt;case&gt; &lt;你dump出来的文件&gt;</code></pre>
+<p>只依赖 Python 标准库，不需要 numpy。它不只报 PASS/FAIL，还会把失败模式翻译成原因：</p>
+<ul><li>输出区全是 <code>0xA5A5A5A5</code> → <code>msce32</code> 没执行，或写到了别的地址 （C 区在镜像里预置了这个值，就是为了让&quot;漏写&quot;和&quot;写了个 0&quot;能区分开）</li><li>只有第 0 行对 → <code>mtilem</code> 没生效，矩阵单元只算了一行</li><li>正好前一半行对 → 累加器清零只覆盖了一半</li><li>结果与期望值的<strong>转置</strong>吻合 → <code>mfmacc</code> 操作数顺序写反了。 正确写法是 <code>mfmacc.s.bf16 md, B, A</code>：第二个操作数放右矩阵，第三个放左矩阵</li><li>零散位置漏写 → 查回写 stride</li></ul>
+<hr>
+<h2>八、包内文件</h2>
+<pre><code>README.md                      本文件
+README.html                    同一份内容的网页版，双击即开（自包含，无外链）
+check.py                       结果比对 + 失败诊断
+index.json                     全部 case 的元信息汇总
+golden_src/                    生成器源码，本包据此可完全重建
+cases/&lt;id&gt;_&lt;name&gt;/
+    prog.S                     完全展开的汇编源码，可读
+    prog.ld                    链接脚本，各段地址钉死在这里
+    prog.elf                   带符号，可用 objdump -d 看指令流
+    prog.bin                   从基址起的连续内存镜像
+    prog.hex                   同上，每行 32 bit ← testbench 用这个
+    a.hex / a.bin              A 矩阵单独的镜像
+    b.hex / b.bin              B 矩阵
+    c_ref.hex / c_ref.bin      期望结果
+    meta.json                  形状、CSR、stride、地址表、markers</code></pre>
+<hr>
+<h2>九、需要改基址 / 加 case 的话</h2>
+<p>生成器就在包里（<code>golden_src/</code>），本包是自包含的，不需要上层项目。</p>
+<p>基址不是 <code>0x8000_0000</code> 的话：</p>
+<pre><code>python3 golden_src/40_gen_ame_vectors.py --base 0x&lt;你的基址&gt; --out .
+source &lt;你的工具链环境&gt;            # 需要 $RISCV_ISA / $CROSS
+golden_src/41_build_vectors.sh</code></pre>
+<p>只改基址的话其实<strong>不必重新汇编</strong>：<code>a.hex</code> / <code>b.hex</code> / <code>c_ref.hex</code> 与地址无关， 只有 <code>prog.hex</code> 里的绝对地址需要重生成。</p>
+<p>段布局在 <code>40_gen_ame_vectors.py</code> 的 <code>SEG</code> 表里，<code>meta.json</code> 会同步反映。 新增 case 只需在同一文件的 <code>CASES</code> 列表里加一行——参考值会自动按上面 第四节的规范算出来，不需要手工填期望值。</p>
+<p>数据用固定种子的 xorshift 生成，<strong>任何机器上重跑都得到逐位相同的结果</strong>。</p>
+<hr>
+<h2>十、还没覆盖的</h2>
+<p>诚实说明，避免误以为这包验完就万事大吉：</p>
+<ul><li><strong>INT8×INT8→INT32 未覆盖</strong>（本包只有 BF16）。硬件支持 INT8 且 K=64， 但上层项目走的是 BF16 路线，没有可信的参考实现，硬造风险更大。需要的话可以补。</li><li><strong>Inf / NaN / 非规格化数未覆盖。</strong> 需要先和架构组确认这些输入下的期望行为， 规范不明确时造出来的向量只会制造争议。</li><li><strong>时序、背靠背发射、accumulator 冲突未覆盖。</strong> 本包验的是数值正确性， 流水线相关的验证需要另一类激励。</li><li><strong><code>mrelease</code> 的语义未单独验证</strong>，只在每个 case 末尾出现一次。</li></ul>
+<p>有问题直接找软件侧，把 <code>check.py</code> 的完整输出带上。</p>
+<p class="meta">由 tools/42_md2html.py 从 README.md 生成。
+内容以 Markdown 源文件为准；改了源文件请重新生成本页。</p>
+</main>
+</body>
+</html>

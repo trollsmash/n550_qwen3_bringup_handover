@@ -1,0 +1,13 @@
+# 权重是可复现的产物，且远超 GitHub 单文件 100 MB 限制。
+# 获取方式见 fpga_bringup/L2_L3_fullmodel/GET_WEIGHTS.md
+w.bin
+*.safetensors
+
+# 打包中间产物
+*.rar
+*.zip
+*.7z
+*.tar.gz
+
+# 防止误提交任何超大文件：提交前跑
+#   find . -type f -size +50M -not -path './.git/*'

@@ -1,0 +1,20 @@
+# S2C 后门加载地址表（由 src/bsp/board.h 生成，勿手改）
+# 生成时间 2026-08-07 11:22
+
+## L0
+bringup_s2c.bin      0x80000000
+PCIe 自证 magic    0x87F00080   (32 位立即数 0x5A5AC3C3，不是文件)
+
+## L2 / L3
+qwen3_s2c.bin        0x80000000
+w.bin                0x88000000
+tok.bin              0xD0000000   (L3 才需要；L2 不加载它)
+
+## 读回
+mailbox 基址       0x87F00000
+STATUS               0x87F00000
+FAILMASK             0x87F0001C
+串口 (16550)       0x20100000
+
+## DDR 可用范围
+                     0x80000000 .. 0xEFFFFFFF

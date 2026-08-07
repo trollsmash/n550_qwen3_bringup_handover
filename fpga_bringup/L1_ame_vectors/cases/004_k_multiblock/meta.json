@@ -1,0 +1,64 @@
+{
+  "case_id": "004",
+  "name": "k_multiblock",
+  "why": "K=256，需连做 8 条 mfmacc 累加到同一累加器。验证累加器中间值按 FP32 承载。真实 GEMM 的 K=1024，这条是它的缩小版；只测单块的话，块间舍入差异永远暴露不出来。",
+  "dtype": {
+    "a": "bf16",
+    "b": "bf16",
+    "c": "fp32"
+  },
+  "shape": {
+    "M": 128,
+    "N": 128,
+    "K": 256
+  },
+  "tile": {
+    "mtilem": 128,
+    "mtilen": 128,
+    "mtilek": 32,
+    "n_mfmacc": 8
+  },
+  "segments": {
+    "text": "0x80000000",
+    "a": "0x80001000",
+    "b": "0x80050000",
+    "c": "0x800A0000",
+    "ref": "0x800B0000",
+    "done": "0x800C0000",
+    "status": "0x800C0004",
+    "failidx": "0x800C0008"
+  },
+  "markers": {
+    "done_magic": "0x600D600D",
+    "status_pass": "0x50415353",
+    "status_fail": "0x4641494C",
+    "c_preset": "0xA5A5A5A5"
+  },
+  "csr": {
+    "mtilem": "0x803",
+    "mtilen": "0x804",
+    "mtilek": "0x805"
+  },
+  "stride_bytes": {
+    "a": 512,
+    "b": 512,
+    "c": 512
+  },
+  "stride_elems": {
+    "a": 256,
+    "b": 256,
+    "c": 128
+  },
+  "row_gap_elems": {
+    "a": 0,
+    "b": 0
+  },
+  "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+  "rounding": "block-exact then FP32 RNE per K-block of 32",
+  "words": {
+    "a": 16384,
+    "b": 16384,
+    "c": 16384
+  },
+  "seed": "0xA3E00004"
+}

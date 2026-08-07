@@ -1,0 +1,64 @@
+{
+  "case_id": "002",
+  "name": "m1_gemv",
+  "why": "M=1 的 GEMV，即 LLM 逐 token 生成（decode）时的真实形状，也是本项目跑得最多的一种。tile 只有 1/128 被填上，边界处理稍有差错就只在这里暴露。K=1024 取自 Qwen3 的 hidden_size。",
+  "dtype": {
+    "a": "bf16",
+    "b": "bf16",
+    "c": "fp32"
+  },
+  "shape": {
+    "M": 1,
+    "N": 128,
+    "K": 1024
+  },
+  "tile": {
+    "mtilem": 1,
+    "mtilen": 128,
+    "mtilek": 32,
+    "n_mfmacc": 32
+  },
+  "segments": {
+    "text": "0x80000000",
+    "a": "0x80001000",
+    "b": "0x80050000",
+    "c": "0x800A0000",
+    "ref": "0x800B0000",
+    "done": "0x800C0000",
+    "status": "0x800C0004",
+    "failidx": "0x800C0008"
+  },
+  "markers": {
+    "done_magic": "0x600D600D",
+    "status_pass": "0x50415353",
+    "status_fail": "0x4641494C",
+    "c_preset": "0xA5A5A5A5"
+  },
+  "csr": {
+    "mtilem": "0x803",
+    "mtilen": "0x804",
+    "mtilek": "0x805"
+  },
+  "stride_bytes": {
+    "a": 2048,
+    "b": 2048,
+    "c": 512
+  },
+  "stride_elems": {
+    "a": 1024,
+    "b": 1024,
+    "c": 128
+  },
+  "row_gap_elems": {
+    "a": 0,
+    "b": 0
+  },
+  "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+  "rounding": "block-exact then FP32 RNE per K-block of 32",
+  "words": {
+    "a": 512,
+    "b": 65536,
+    "c": 128
+  },
+  "seed": "0xA3E00002"
+}

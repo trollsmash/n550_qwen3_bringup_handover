@@ -1,0 +1,64 @@
+{
+  "case_id": "005",
+  "name": "partial_n",
+  "why": "N=13：输出宽度不满且是质数。N 方向的部分 tile 与 M 方向走的是不同的硬件路径（一个是行数，一个是列数），必须分开验。",
+  "dtype": {
+    "a": "bf16",
+    "b": "bf16",
+    "c": "fp32"
+  },
+  "shape": {
+    "M": 128,
+    "N": 13,
+    "K": 32
+  },
+  "tile": {
+    "mtilem": 128,
+    "mtilen": 13,
+    "mtilek": 32,
+    "n_mfmacc": 1
+  },
+  "segments": {
+    "text": "0x80000000",
+    "a": "0x80001000",
+    "b": "0x80050000",
+    "c": "0x800A0000",
+    "ref": "0x800B0000",
+    "done": "0x800C0000",
+    "status": "0x800C0004",
+    "failidx": "0x800C0008"
+  },
+  "markers": {
+    "done_magic": "0x600D600D",
+    "status_pass": "0x50415353",
+    "status_fail": "0x4641494C",
+    "c_preset": "0xA5A5A5A5"
+  },
+  "csr": {
+    "mtilem": "0x803",
+    "mtilen": "0x804",
+    "mtilek": "0x805"
+  },
+  "stride_bytes": {
+    "a": 64,
+    "b": 64,
+    "c": 52
+  },
+  "stride_elems": {
+    "a": 32,
+    "b": 32,
+    "c": 13
+  },
+  "row_gap_elems": {
+    "a": 0,
+    "b": 0
+  },
+  "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+  "rounding": "block-exact then FP32 RNE per K-block of 32",
+  "words": {
+    "a": 2048,
+    "b": 208,
+    "c": 1664
+  },
+  "seed": "0xA3E00005"
+}

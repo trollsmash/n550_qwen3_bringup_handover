@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen3-0.6B on RISC-V —— FPGA 上板交付包</title>
+<style>
+:root {
+  --bg:#ffffff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0;
+  --code-bg:#f6f8fa; --code-fg:#1f2328; --accent:#0969da;
+  --quote-bar:#d1d9e0; --th-bg:#f6f8fa; --mark:#fff8c5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#3d444d;
+    --code-bg:#161b22; --code-fg:#e6edf3; --accent:#4493f8;
+    --quote-bar:#3d444d; --th-bg:#161b22; --mark:#3f2e00;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; padding:2.5rem 1.25rem 6rem; background:var(--bg); color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",
+              "PingFang SC","Hiragino Sans GB",sans-serif;
+  font-size:16px; line-height:1.7;
+  -webkit-text-size-adjust:100%;
+}
+main { max-width:900px; margin:0 auto; }
+h1,h2,h3 { line-height:1.3; margin:2.2em 0 .8em; font-weight:600; }
+h1 { font-size:1.9rem; margin-top:0; padding-bottom:.35em; border-bottom:1px solid var(--line); }
+h2 { font-size:1.4rem; padding-bottom:.3em; border-bottom:1px solid var(--line); }
+h3 { font-size:1.15rem; }
+p { margin:.9em 0; }
+a { color:var(--accent); text-decoration:none; }
+a:hover { text-decoration:underline; }
+hr { border:0; border-top:1px solid var(--line); margin:2.5em 0; }
+strong { font-weight:650; }
+code {
+  background:var(--code-bg); color:var(--code-fg); border-radius:5px;
+  padding:.15em .38em; font-size:.88em;
+  font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+pre {
+  background:var(--code-bg); border:1px solid var(--line); border-radius:8px;
+  padding:.9rem 1rem; overflow-x:auto; margin:1.1em 0; line-height:1.55;
+}
+pre code { background:none; padding:0; font-size:.85rem; }
+blockquote {
+  margin:1.2em 0; padding:.15em 1.1em; color:var(--muted);
+  border-left:4px solid var(--quote-bar);
+}
+blockquote p { margin:.6em 0; }
+ul,ol { margin:.9em 0; padding-left:1.6em; }
+li { margin:.4em 0; }
+li > p { margin:.35em 0; }
+/* 宽表格自己横向滚动，页面本身绝不横向滚动 */
+.tablewrap { overflow-x:auto; margin:1.3em 0; }
+table { border-collapse:collapse; width:100%; font-size:.93rem; }
+th,td { border:1px solid var(--line); padding:.5em .75em; text-align:left; vertical-align:top; }
+th { background:var(--th-bg); font-weight:650; white-space:nowrap; }
+td code, th code { white-space:nowrap; }
+.meta { color:var(--muted); font-size:.85rem; margin-top:3rem;
+        padding-top:1rem; border-top:1px solid var(--line); }
+@media print {
+  body { padding:0; font-size:11pt; }
+  pre,.tablewrap { break-inside:avoid; }
+  h1,h2,h3 { break-after:avoid; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>Qwen3-0.6B on RISC-V —— FPGA 上板交付包</h1>
+<blockquote><p>由 <code>tools/44_pack_fpga.sh</code> 生成，地址取自 <code>src/bsp/board.h</code>。 生成时间：2026-08-07 11:22</p></blockquote>
+<p>板子：S2C，DDR <code>0x80000000</code>–<code>0xEFFFFFFF</code>， 串口 <code>0x20100000</code>（16550, 8N1），CPU/AME 50 MHz。</p>
+<hr>
+<h2>按这个顺序走，别跳级</h2>
+<p>每一级失败都直接指向一个子系统。<strong>跳过前面直接跑全模型，出了问题分不清是 PCIe、时钟、串口、矩阵单元还是模型本身</strong>——而全模型镜像 1.11 GB，加载一次就要等。</p>
+<div class='tablewrap'><table><thead><tr><th>级别</th><th>目录</th><th>镜像大小</th><th>验什么</th><th>失败说明</th></tr></thead><tbody><tr><td><strong>L0</strong></td><td><code>L0_bringup/</code></td><td>3.6 KB</td><td>PCIe 写入、复位、取指、串口、RVV、AME、时钟</td><td>板子基础通路</td></tr><tr><td><strong>L1</strong></td><td><code>L1_ame_vectors/</code></td><td>786 KB</td><td>AME 矩阵单元数值正确性</td><td>矩阵扩展实现</td></tr><tr><td><strong>L2</strong></td><td><code>L2_L3_fullmodel/</code></td><td>1.11 GB</td><td>全模型前向，对黄金数据自检</td><td>模型链路</td></tr><tr><td><strong>L3</strong></td><td>同上 + <code>tok.bin</code></td><td>+3.3 MB</td><td>中文进中文出的完整 demo</td><td>—</td></tr></tbody></table></div>
+<h3>L0 —— 先跑这个</h3>
+<p>看 <code>L0_bringup/checklist.md</code>（或 <code>.html</code>，可打印）。一页纸，含写入地址、 读回判读表、故障速查。</p>
+<p><strong>判成败只看一个地址</strong>：<code>0x87F0001C</code>（FAILMASK），为 0 才算过。 不要只看 STATUS——软失败后程序会继续跑，STATUS 会被后续阶段覆盖。</p>
+<p>L0 第六步会回填性能采样数据（<code>CYCLES</code> / <code>ITERS</code>），<strong>把这两个数发回软件侧</strong>： 它们能把每 token 耗时从&quot;0.2 秒到 3 秒&quot;这个跨一个数量级的估算收敛成确定值。</p>
+<h3>L1 —— AME 数值</h3>
+<p><code>L1_ame_vectors/</code> 是给 RTL 验证同事的独立交付包，这里整份带上， 上板时若 AME 数值出问题，手边就有能立刻复现的最小激励。</p>
+<p>看该目录下的 <code>README.md</code>。8 个 case，程序自带比对， 把 <code>cases/001*/prog.hex</code> 装到 <code>0x80000000</code> 起即可。</p>
+<h3>L2 / L3 —— 全模型</h3>
+<p>地址见 <code>addresses.txt</code>。<strong>L2 先不要加载 <code>tok.bin</code></strong>： 不加载时程序走回归模式，用固定的 4 个 token 跑一遍并与黄金数据自检， 不依赖分词器，出问题的范围更小。L2 过了再加 <code>tok.bin</code> 跑 L3。</p>
+<hr>
+<h2>三条通用注意事项</h2>
+<p><strong>一、反复换镜像时先断电。</strong> 本核有 32 KB L1I，与 D-cache 不自动一致；host 经 PCIe 写镜像对 CPU 而言 就是&quot;动态加载指令&quot;。软复位时 I-cache 里可能还留着上一个镜像的指令， 现象是&quot;明明重新烧了，行为一点没变&quot;。<code>start.S</code> 里有 <code>fence.i</code> 兜底， 但遇到无法解释的&quot;改了没生效&quot;，<strong>先断电重来再怀疑代码</strong>。</p>
+<p><strong>二、传输后先校验。</strong> 1.11 GB 的权重经 U 盘或网络传过去，损坏不会有任何提示， 上板后表现为&quot;权重 magic 不对&quot;，或者更糟——算出一堆垃圾还不报错。</p>
+<p>md5sum -c checksums.md5          # Linux / WSL，全绿才继续 # Windows: certutil -hashfile L2_L3_fullmodel\w.bin MD5</p>
+<p><code>MANIFEST.txt</code> 是同一份信息的人读版本，带文件大小， 扫一眼就能看出哪个文件没传全。</p>
+<p><strong>三、串口没输出不代表失败。</strong> 观测主通道是 mailbox（PCIe 可回读 DDR），串口只是辅助。 先读 mailbox 再怀疑程序。</p>
+<hr>
+<h2>出问题时带上这些信息</h2>
+<ul><li>mailbox 全部字段的读回值（见 <code>L0_bringup/checklist.md</code> 的字段表）</li><li>串口完整日志（若有）</li><li>若串口打出 <code>*** TRAP ***</code>：<code>mcause</code> / <code>mepc</code> / <code>mtval</code> 三个值， 软件侧可用配套的 <code>.elf</code> 定位到源码行</li><li>用的是哪一级、镜像的 md5</li></ul>
+<p class="meta">由 tools/42_md2html.py 从 README.md 生成。
+内容以 Markdown 源文件为准；改了源文件请重新生成本页。</p>
+</main>
+</body>
+</html>
