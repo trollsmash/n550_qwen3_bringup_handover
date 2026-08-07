@@ -1,5 +1,5 @@
 # 文件清单（给人看的；机器校验用 checksums.md5）
-# 生成时间 2026-08-07 11:33
+# 生成时间 2026-08-07 12:06
 #
 # 注意：w.bin (1.11 GB) 不在本仓库，也不在下面的清单里。
 #       它的大小与 md5 见 L2_L3_fullmodel/GET_WEIGHTS.md，请单独核对。
@@ -117,6 +117,33 @@
          16608  L2_L3_fullmodel/qwen3_s2c.bin
          27224  L2_L3_fullmodel/qwen3_s2c.elf
        3409013  L2_L3_fullmodel/tok.bin
-          7421  README.html
-          3513  README.md
+          7712  README.html
+          3741  README.md
            570  addresses.txt
+          2964  src/BUILD.md
+          2845  src/src/Makefile
+         11557  src/src/bsp/board.h
+           599  src/src/bsp/libm_stub.c
+          1337  src/src/bsp/qemu_virt.ld
+          5497  src/src/bsp/start.S
+          2444  src/src/bsp/string_min.c
+          2897  src/src/kernels.h
+          7822  src/src/kernels_ame.c
+          3626  src/src/kernels_rvvbf16.c
+           795  src/src/kernels_scalar.c
+          2620  src/src/kernels_tiled.c
+         10297  src/src/main.c
+         11751  src/src/main_baremetal.c
+         11548  src/src/main_qemu.c
+          2072  src/src/ops.h
+          8451  src/src/ops_rvv.c
+          2776  src/src/ops_scalar.c
+         17736  src/src/qwen3.c
+          8790  src/src/qwen3.h
+          3620  src/src/qwen3_config.h
+          3901  src/src/test_kernels.c
+         13529  src/src/tokenizer.c
+          3776  src/src/tokenizer.h
+         14664  src/tests/bringup.c
+         11117  src/tools/build_riscv.sh
+          4460  src/tools/env.sh

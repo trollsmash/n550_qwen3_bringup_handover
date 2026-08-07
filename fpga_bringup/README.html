@@ -71,12 +71,13 @@ td code, th code { white-space:nowrap; }
 <body>
 <main>
 <h1>Qwen3-0.6B on RISC-V —— FPGA 上板交付包</h1>
-<blockquote><p>由 <code>tools/44_pack_fpga.sh</code> 生成，地址取自 <code>src/bsp/board.h</code>。 生成时间：2026-08-07 11:22</p></blockquote>
+<blockquote><p>由 <code>tools/44_pack_fpga.sh</code> 生成，地址取自 <code>src/bsp/board.h</code>。 生成时间：2026-08-07 12:05</p></blockquote>
 <p>板子：S2C，DDR <code>0x80000000</code>–<code>0xEFFFFFFF</code>， 串口 <code>0x20100000</code>（16550, 8N1），CPU/AME 50 MHz。</p>
 <hr>
 <h2>按这个顺序走，别跳级</h2>
 <p>每一级失败都直接指向一个子系统。<strong>跳过前面直接跑全模型，出了问题分不清是 PCIe、时钟、串口、矩阵单元还是模型本身</strong>——而全模型镜像 1.11 GB，加载一次就要等。</p>
 <div class='tablewrap'><table><thead><tr><th>级别</th><th>目录</th><th>镜像大小</th><th>验什么</th><th>失败说明</th></tr></thead><tbody><tr><td><strong>L0</strong></td><td><code>L0_bringup/</code></td><td>3.6 KB</td><td>PCIe 写入、复位、取指、串口、RVV、AME、时钟</td><td>板子基础通路</td></tr><tr><td><strong>L1</strong></td><td><code>L1_ame_vectors/</code></td><td>786 KB</td><td>AME 矩阵单元数值正确性</td><td>矩阵扩展实现</td></tr><tr><td><strong>L2</strong></td><td><code>L2_L3_fullmodel/</code></td><td>1.11 GB</td><td>全模型前向，对黄金数据自检</td><td>模型链路</td></tr><tr><td><strong>L3</strong></td><td>同上 + <code>tok.bin</code></td><td>+3.3 MB</td><td>中文进中文出的完整 demo</td><td>—</td></tr></tbody></table></div>
+<p><strong>源码在 <a href="src/"><code>src/</code></a></strong>，含全部 C/汇编与构建脚本，可以自己改地址、 加打印、重新编译。怎么编、最可能改哪几处、改地址时要避开什么坑， 见 <a href="src/BUILD.md"><code>src/BUILD.md</code></a>。</p>
 <h3>L0 —— 先跑这个</h3>
 <p>看 <code>L0_bringup/checklist.md</code>（或 <code>.html</code>，可打印）。一页纸，含写入地址、 读回判读表、故障速查。</p>
 <p><strong>判成败只看一个地址</strong>：<code>0x87F0001C</code>（FAILMASK），为 0 才算过。 不要只看 STATUS——软失败后程序会继续跑，STATUS 会被后续阶段覆盖。</p>
