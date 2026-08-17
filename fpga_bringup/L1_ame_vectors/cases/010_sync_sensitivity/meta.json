@@ -51,7 +51,7 @@
     "c_preset": "0xA5A5A5A5",
     "a_preset": "0x5A5A"
   },
-  "xor_ref": "0x0740BEF8",
+  "xor_ref": "0x0740BC93",
   "verdict": "status 为判据；probe1/probe2/probe_eq 仅为观察项，不判成败",
   "stride_bytes": {
     "a": 512,
@@ -60,5 +60,7 @@
   },
   "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
   "rounding": "block-exact then FP32 RNE per K-block of 32; FP32->BF16 by RNE (frm=0)",
+  "norm_tol": 1.9073486328125e-06,
+  "norm_tol_note": "2 * n_roundings(16) * 2^-24; criterion is |got-ref| / c_peak <= norm_tol",
   "seed": "0xA3E0000A"
 }

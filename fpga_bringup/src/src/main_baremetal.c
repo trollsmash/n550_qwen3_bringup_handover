@@ -255,6 +255,14 @@ void qwen3_main(void) {
     P("\n");
 
     /* 与黄金数据的前 4 个 token 比对 —— 无需 host 参与即可自检。 */
+    /* 黄金 token，来自 PyTorch 参考实现。
+     *
+     * 已按**真机的累加语义**验证过，不是只在 QEMU 上对过：
+     * AMU RTL 每 16 个 K 元素就把累加器落回 FP32（ma_pkg.sv 的 ARRAY_K_FP=16），
+     * 而 QEMU 的粒度是 32，两者数值并不逐位相同。
+     * 用 src/kernels_hwsim.c（复刻 RTL 语义）在 PC 上跑完整模型，
+     * 得到的 token 与下面完全一致 —— 说明这点数值差异不影响 argmax，
+     * 上板后这四个值依然成立。 */
     static const int expect[] = { 3837, 101889, 106525, 56568 };
     int ok = 1;
     for (int i = 0; i < 4 && i < n_gen; i++) if (gen[i] != expect[i]) ok = 0;

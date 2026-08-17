@@ -155,9 +155,18 @@ def main():
         print(f"  (多出的 {len(got)-total} 个字将被忽略)")
         got = got[:total]
 
+    # 部分和峰值：把误差归一化到"累加过程实际经历的量级"。
+    # 没有它就只能看 ULP，而 ULP 是相对最终值算的 —— 正负项大量抵消的点上
+    # （最终值远小于中间量级），一个完全正常的实现也会报出上万 ULP。
+    peak = None
+    pk_path = d / "c_peak.hex"
+    if pk_path.exists():
+        peak = [bits_f32(w) for w in load_words(pk_path)][:total]
+
     n_exact = n_1ulp = n_bad = 0
     dirty_n = zero_n = 0
     worst = 0
+    worst_norm = 0.0
     bad = []
     for i in range(total):
         r, g = ref[i], got[i]
@@ -166,6 +175,9 @@ def main():
         if g == 0:
             zero_n += 1
         d_ulp = ulp_diff(r, g)
+        if peak is not None and peak[i] > 0:
+            nrm = abs(bits_f32(r) - bits_f32(g)) / peak[i]
+            worst_norm = max(worst_norm, nrm)
         if d_ulp == 0:
             n_exact += 1
         elif d_ulp == 1:
@@ -181,6 +193,26 @@ def main():
     print(f"差 1 ULP  : {n_1ulp}   （真值落在两个 FP32 中点，可接受）")
     print(f"差 >1 ULP : {n_bad}")
 
+    # ---- 归一化误差：与最终值的量级无关，才是衡量累加精度的量 ----
+    # 阈值来自 meta.json，按舍入次数推出，不是拍的常数。
+    # 硬件每 16 个元素（ARRAY_K_FP）舍入一次，故 K/16 次。
+    n_blk = (meta["shape"]["K"] + 15) // 16
+    NORM_TOL = meta.get("norm_tol", 2.0 * n_blk * (2.0 ** -24))
+    norm_ok = None
+    if peak is not None:
+        norm_ok = worst_norm <= NORM_TOL
+        print(f"\n归一化误差: 最大 {worst_norm:.3e}"
+              f"  （阈值 {NORM_TOL:.3e}，按累加过程的量级算）")
+        print(f"            阈值依据: 2 x {n_blk} 次舍入 x 2^-24"
+              f"（硬件每 16 元素舍入一次，每次最坏半个 ULP，留 2 倍余量）")
+        print(f"            换算成中间量级的 ULP 约 {worst_norm * 2**23:.2f} 个"
+              f"，余量 {NORM_TOL / max(worst_norm, 1e-30):.1f}x")
+        cinfo = meta.get("cancellation")
+        if cinfo:
+            print(f"本 case 抵消比: 中位 {cinfo['median_ratio']}x  "
+                  f"最大 {cinfo['max_ratio']}x"
+                  f"  高抵消点 {len(cinfo.get('hot_points', []))} 个")
+
     if n_bad == 0:
         if n_1ulp:
             print("\n>>> PASS（含中点舍入差异）")
@@ -190,7 +222,31 @@ def main():
             print("\n>>> PASS  完全一致")
         return 0
 
+    # 有 ULP 超标，但归一化误差达标 —— 典型的抵消放大，不是实现缺陷
+    if norm_ok:
+        print(f"\n>>> PASS（按归一化误差判据）")
+        print(f"    有 {n_bad} 个点的 ULP 数超标，但归一化误差 "
+              f"{worst_norm:.3e} 在阈值内。")
+        print("    这是正负项抵消导致的：误差在累加过程的量级上产生，"
+              "而 ULP 是相对最终值算的，")
+        print("    抵消越厉害放大越多。下面列出抵消最严重的点供核对。")
+        cinfo = meta.get("cancellation") or {}
+        for hp in (cinfo.get("hot_points") or [])[:5]:
+            j = hp["m"] * N + hp["n"]
+            if j < total:
+                nrm = (abs(bits_f32(ref[j]) - bits_f32(got[j])) / hp["peak"]
+                       if hp["peak"] > 0 else 0.0)
+                print(f"      ({hp['m']:3d},{hp['n']:3d})  抵消 {hp['ratio']:9.1f}x"
+                      f"  ULP {ulp_diff(ref[j], got[j])}"
+                      f"  归一化 {nrm:.2e}")
+        print("\n    若要逐位一致，需与架构组确认累加器的位宽与舍入点，"
+              "而不是改这几个点。")
+        return 0
+
     print(f"\n>>> FAIL  最大偏差 {worst} ULP")
+    if peak is not None:
+        print(f"    归一化误差 {worst_norm:.3e} 也超过阈值 {NORM_TOL:.3e}，"
+              "说明不是抵消放大，是真实的精度问题。")
     if args.verbose or bad:
         print("\n前几个不符元素：")
         print("   下标   (m, n)      期望        实测       差(ULP)")

@@ -65,6 +65,127 @@
     "b": 0
   },
   "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+  "cancellation": {
+    "median_ratio": 1.49,
+    "max_ratio": 31372.8,
+    "hot_points": [
+      {
+        "m": 126,
+        "n": 63,
+        "ratio": 31372.8,
+        "peak": 44864.87890625,
+        "value": 1.430058479309082
+      },
+      {
+        "m": 83,
+        "n": 55,
+        "ratio": 7717.4,
+        "peak": 41787.5,
+        "value": 5.4147186279296875
+      },
+      {
+        "m": 22,
+        "n": 47,
+        "ratio": 5747.2,
+        "peak": 45569.8671875,
+        "value": -7.929069519042969
+      },
+      {
+        "m": 107,
+        "n": 61,
+        "ratio": 3310.6,
+        "peak": 38239.87890625,
+        "value": -11.550666809082031
+      },
+      {
+        "m": 16,
+        "n": 35,
+        "ratio": 2990.1,
+        "peak": 40743.7265625,
+        "value": 13.626007080078125
+      },
+      {
+        "m": 58,
+        "n": 77,
+        "ratio": 2110.7,
+        "peak": 30604.068359375,
+        "value": 14.499496459960938
+      },
+      {
+        "m": 63,
+        "n": 12,
+        "ratio": 1626.6,
+        "peak": 58107.6328125,
+        "value": 35.72254943847656
+      },
+      {
+        "m": 72,
+        "n": 75,
+        "ratio": 1448.7,
+        "peak": 42353.0234375,
+        "value": -29.23528289794922
+      },
+      {
+        "m": 48,
+        "n": 89,
+        "ratio": 1335.0,
+        "peak": 14619.1083984375,
+        "value": -10.950995445251465
+      },
+      {
+        "m": 123,
+        "n": 104,
+        "ratio": 1334.4,
+        "peak": 44729.8203125,
+        "value": 33.52035903930664
+      },
+      {
+        "m": 100,
+        "n": 34,
+        "ratio": 1305.3,
+        "peak": 37645.55078125,
+        "value": 28.83958625793457
+      },
+      {
+        "m": 74,
+        "n": 75,
+        "ratio": 1132.5,
+        "peak": 22760.4921875,
+        "value": -20.09668731689453
+      },
+      {
+        "m": 85,
+        "n": 63,
+        "ratio": 1083.5,
+        "peak": 41690.28125,
+        "value": 38.478790283203125
+      },
+      {
+        "m": 94,
+        "n": 74,
+        "ratio": 985.2,
+        "peak": 28950.478515625,
+        "value": -29.385692596435547
+      },
+      {
+        "m": 62,
+        "n": 123,
+        "ratio": 954.7,
+        "peak": 47252.59375,
+        "value": -49.49233627319336
+      },
+      {
+        "m": 105,
+        "n": 53,
+        "ratio": 867.2,
+        "peak": 23236.626953125,
+        "value": 26.79388999938965
+      }
+    ],
+    "note": "ratio = peak_partial_sum / |final|. Use normalized error (|got-ref| / c_peak) as the criterion; ULP counts are meaningless where ratio is large."
+  },
+  "norm_tol": 7.62939453125e-06,
+  "norm_tol_note": "2 * n_roundings(64) * 2^-24; hardware rounds every 16 elements (ARRAY_K_FP), not an arbitrary constant",
   "rounding": "block-exact then FP32 RNE per K-block of 32",
   "words": {
     "a": 65536,

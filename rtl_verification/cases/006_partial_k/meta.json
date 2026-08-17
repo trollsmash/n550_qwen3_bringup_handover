@@ -65,6 +65,36 @@
     "b": 1
   },
   "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+  "cancellation": {
+    "median_ratio": 1.0,
+    "max_ratio": 246.8,
+    "hot_points": [
+      {
+        "m": 22,
+        "n": 122,
+        "ratio": 246.8,
+        "peak": 9.033710479736328,
+        "value": 0.036602020263671875
+      },
+      {
+        "m": 56,
+        "n": 96,
+        "ratio": 178.3,
+        "peak": 1.1777496337890625,
+        "value": 0.0066070556640625
+      },
+      {
+        "m": 75,
+        "n": 83,
+        "ratio": 126.9,
+        "peak": 14.772287368774414,
+        "value": -0.11638450622558594
+      }
+    ],
+    "note": "ratio = peak_partial_sum / |final|. Use normalized error (|got-ref| / c_peak) as the criterion; ULP counts are meaningless where ratio is large."
+  },
+  "norm_tol": 2.384185791015625e-07,
+  "norm_tol_note": "2 * n_roundings(2) * 2^-24; hardware rounds every 16 elements (ARRAY_K_FP), not an arbitrary constant",
   "rounding": "block-exact then FP32 RNE per K-block of 32",
   "words": {
     "a": 1152,

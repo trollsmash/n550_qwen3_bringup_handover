@@ -1,5 +1,5 @@
 # 本包的构建环境（由 tools/41_build_vectors.sh 生成）
-# 生成时间: 2026-08-07 17:05
+# 生成时间: 2026-08-17 15:33
 
 march   = rv64gcv_zfh_zfbfmin_zvfh_zvfbfmin_zvfbfwma_xewmatrix1p0_zicbom_zicbop_zicboz_xdcache
 mabi    = lp64d

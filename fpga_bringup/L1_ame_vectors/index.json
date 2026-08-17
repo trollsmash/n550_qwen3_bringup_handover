@@ -2,6 +2,953 @@
   "base": "0x80000000",
   "cases": [
     {
+      "case_id": "001",
+      "name": "bf16_full_tile",
+      "why": "满 tile 基线。M/N/K 全部取最大值，覆盖 128x128 个输出元素的完整通路。先过这一条再看别的：它失败说明是根本性问题，查后面的没有意义。",
+      "dtype": {
+        "a": "bf16",
+        "b": "bf16",
+        "c": "fp32"
+      },
+      "shape": {
+        "M": 128,
+        "N": 128,
+        "K": 32
+      },
+      "tile": {
+        "mtilem": 128,
+        "mtilen": 128,
+        "mtilek": 32,
+        "n_mfmacc": 1
+      },
+      "segments": {
+        "text": "0x80000000",
+        "a": "0x80001000",
+        "b": "0x80050000",
+        "c": "0x800A0000",
+        "ref": "0x800B0000",
+        "done": "0x800C0000",
+        "status": "0x800C0004",
+        "failidx": "0x800C0008",
+        "a_src": "0x800D0000",
+        "xor": "0x80160000",
+        "xor_ref": "0x80160004",
+        "stage_a": "0x80160008",
+        "stage_b": "0x8016000C",
+        "probe1": "0x80160010",
+        "probe2": "0x80160014",
+        "probe_eq": "0x80160018",
+        "trap_cause": "0x8016001C",
+        "trap_epc": "0x80160020",
+        "trap_tval": "0x80160024"
+      },
+      "markers": {
+        "done_magic": "0x600D600D",
+        "status_pass": "0x50415353",
+        "status_fail": "0x4641494C",
+        "c_preset": "0xA5A5A5A5"
+      },
+      "csr": {
+        "mtilem": "0x803",
+        "mtilen": "0x804",
+        "mtilek": "0x805"
+      },
+      "stride_bytes": {
+        "a": 64,
+        "b": 64,
+        "c": 512
+      },
+      "stride_elems": {
+        "a": 32,
+        "b": 32,
+        "c": 128
+      },
+      "row_gap_elems": {
+        "a": 0,
+        "b": 0
+      },
+      "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+      "cancellation": {
+        "median_ratio": 1.0,
+        "max_ratio": 163.0,
+        "hot_points": [
+          {
+            "m": 118,
+            "n": 56,
+            "ratio": 163.0,
+            "peak": 24.215499877929688,
+            "value": -0.1485595703125
+          }
+        ],
+        "note": "ratio = peak_partial_sum / |final|. Use normalized error (|got-ref| / c_peak) as the criterion; ULP counts are meaningless where ratio is large."
+      },
+      "norm_tol": 2.384185791015625e-07,
+      "norm_tol_note": "2 * n_roundings(2) * 2^-24; hardware rounds every 16 elements (ARRAY_K_FP), not an arbitrary constant",
+      "rounding": "block-exact then FP32 RNE per K-block of 32",
+      "words": {
+        "a": 2048,
+        "b": 2048,
+        "c": 16384
+      },
+      "seed": "0xA3E00001"
+    },
+    {
+      "case_id": "002",
+      "name": "m1_gemv",
+      "why": "M=1 的 GEMV，即 LLM 逐 token 生成（decode）时的真实形状，也是本项目跑得最多的一种。tile 只有 1/128 被填上，边界处理稍有差错就只在这里暴露。K=1024 取自 Qwen3 的 hidden_size。",
+      "dtype": {
+        "a": "bf16",
+        "b": "bf16",
+        "c": "fp32"
+      },
+      "shape": {
+        "M": 1,
+        "N": 128,
+        "K": 1024
+      },
+      "tile": {
+        "mtilem": 1,
+        "mtilen": 128,
+        "mtilek": 32,
+        "n_mfmacc": 32
+      },
+      "segments": {
+        "text": "0x80000000",
+        "a": "0x80001000",
+        "b": "0x80050000",
+        "c": "0x800A0000",
+        "ref": "0x800B0000",
+        "done": "0x800C0000",
+        "status": "0x800C0004",
+        "failidx": "0x800C0008",
+        "a_src": "0x800D0000",
+        "xor": "0x80160000",
+        "xor_ref": "0x80160004",
+        "stage_a": "0x80160008",
+        "stage_b": "0x8016000C",
+        "probe1": "0x80160010",
+        "probe2": "0x80160014",
+        "probe_eq": "0x80160018",
+        "trap_cause": "0x8016001C",
+        "trap_epc": "0x80160020",
+        "trap_tval": "0x80160024"
+      },
+      "markers": {
+        "done_magic": "0x600D600D",
+        "status_pass": "0x50415353",
+        "status_fail": "0x4641494C",
+        "c_preset": "0xA5A5A5A5"
+      },
+      "csr": {
+        "mtilem": "0x803",
+        "mtilen": "0x804",
+        "mtilek": "0x805"
+      },
+      "stride_bytes": {
+        "a": 2048,
+        "b": 2048,
+        "c": 512
+      },
+      "stride_elems": {
+        "a": 1024,
+        "b": 1024,
+        "c": 128
+      },
+      "row_gap_elems": {
+        "a": 0,
+        "b": 0
+      },
+      "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+      "cancellation": {
+        "median_ratio": 1.0,
+        "max_ratio": 1.0,
+        "hot_points": [],
+        "note": "ratio = peak_partial_sum / |final|. Use normalized error (|got-ref| / c_peak) as the criterion; ULP counts are meaningless where ratio is large."
+      },
+      "norm_tol": 7.62939453125e-06,
+      "norm_tol_note": "2 * n_roundings(64) * 2^-24; hardware rounds every 16 elements (ARRAY_K_FP), not an arbitrary constant",
+      "rounding": "block-exact then FP32 RNE per K-block of 32",
+      "words": {
+        "a": 512,
+        "b": 65536,
+        "c": 128
+      },
+      "seed": "0xA3E00002"
+    },
+    {
+      "case_id": "003",
+      "name": "partial_m",
+      "why": "M=7：非 2 的幂、非对齐的部分 tile。用 7 而不是 8 或 64，是为了让任何按 2 的幂做的隐式假设立刻失效。",
+      "dtype": {
+        "a": "bf16",
+        "b": "bf16",
+        "c": "fp32"
+      },
+      "shape": {
+        "M": 7,
+        "N": 128,
+        "K": 32
+      },
+      "tile": {
+        "mtilem": 7,
+        "mtilen": 128,
+        "mtilek": 32,
+        "n_mfmacc": 1
+      },
+      "segments": {
+        "text": "0x80000000",
+        "a": "0x80001000",
+        "b": "0x80050000",
+        "c": "0x800A0000",
+        "ref": "0x800B0000",
+        "done": "0x800C0000",
+        "status": "0x800C0004",
+        "failidx": "0x800C0008",
+        "a_src": "0x800D0000",
+        "xor": "0x80160000",
+        "xor_ref": "0x80160004",
+        "stage_a": "0x80160008",
+        "stage_b": "0x8016000C",
+        "probe1": "0x80160010",
+        "probe2": "0x80160014",
+        "probe_eq": "0x80160018",
+        "trap_cause": "0x8016001C",
+        "trap_epc": "0x80160020",
+        "trap_tval": "0x80160024"
+      },
+      "markers": {
+        "done_magic": "0x600D600D",
+        "status_pass": "0x50415353",
+        "status_fail": "0x4641494C",
+        "c_preset": "0xA5A5A5A5"
+      },
+      "csr": {
+        "mtilem": "0x803",
+        "mtilen": "0x804",
+        "mtilek": "0x805"
+      },
+      "stride_bytes": {
+        "a": 64,
+        "b": 64,
+        "c": 512
+      },
+      "stride_elems": {
+        "a": 32,
+        "b": 32,
+        "c": 128
+      },
+      "row_gap_elems": {
+        "a": 0,
+        "b": 0
+      },
+      "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+      "cancellation": {
+        "median_ratio": 1.0,
+        "max_ratio": 4.4,
+        "hot_points": [],
+        "note": "ratio = peak_partial_sum / |final|. Use normalized error (|got-ref| / c_peak) as the criterion; ULP counts are meaningless where ratio is large."
+      },
+      "norm_tol": 2.384185791015625e-07,
+      "norm_tol_note": "2 * n_roundings(2) * 2^-24; hardware rounds every 16 elements (ARRAY_K_FP), not an arbitrary constant",
+      "rounding": "block-exact then FP32 RNE per K-block of 32",
+      "words": {
+        "a": 112,
+        "b": 2048,
+        "c": 896
+      },
+      "seed": "0xA3E00003"
+    },
+    {
+      "case_id": "004",
+      "name": "k_multiblock",
+      "why": "K=256，需连做 8 条 mfmacc 累加到同一累加器。验证累加器中间值按 FP32 承载。真实 GEMM 的 K=1024，这条是它的缩小版；只测单块的话，块间舍入差异永远暴露不出来。",
+      "dtype": {
+        "a": "bf16",
+        "b": "bf16",
+        "c": "fp32"
+      },
+      "shape": {
+        "M": 128,
+        "N": 128,
+        "K": 256
+      },
+      "tile": {
+        "mtilem": 128,
+        "mtilen": 128,
+        "mtilek": 32,
+        "n_mfmacc": 8
+      },
+      "segments": {
+        "text": "0x80000000",
+        "a": "0x80001000",
+        "b": "0x80050000",
+        "c": "0x800A0000",
+        "ref": "0x800B0000",
+        "done": "0x800C0000",
+        "status": "0x800C0004",
+        "failidx": "0x800C0008",
+        "a_src": "0x800D0000",
+        "xor": "0x80160000",
+        "xor_ref": "0x80160004",
+        "stage_a": "0x80160008",
+        "stage_b": "0x8016000C",
+        "probe1": "0x80160010",
+        "probe2": "0x80160014",
+        "probe_eq": "0x80160018",
+        "trap_cause": "0x8016001C",
+        "trap_epc": "0x80160020",
+        "trap_tval": "0x80160024"
+      },
+      "markers": {
+        "done_magic": "0x600D600D",
+        "status_pass": "0x50415353",
+        "status_fail": "0x4641494C",
+        "c_preset": "0xA5A5A5A5"
+      },
+      "csr": {
+        "mtilem": "0x803",
+        "mtilen": "0x804",
+        "mtilek": "0x805"
+      },
+      "stride_bytes": {
+        "a": 512,
+        "b": 512,
+        "c": 512
+      },
+      "stride_elems": {
+        "a": 256,
+        "b": 256,
+        "c": 128
+      },
+      "row_gap_elems": {
+        "a": 0,
+        "b": 0
+      },
+      "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+      "cancellation": {
+        "median_ratio": 1.0,
+        "max_ratio": 1.1,
+        "hot_points": [],
+        "note": "ratio = peak_partial_sum / |final|. Use normalized error (|got-ref| / c_peak) as the criterion; ULP counts are meaningless where ratio is large."
+      },
+      "norm_tol": 1.9073486328125e-06,
+      "norm_tol_note": "2 * n_roundings(16) * 2^-24; hardware rounds every 16 elements (ARRAY_K_FP), not an arbitrary constant",
+      "rounding": "block-exact then FP32 RNE per K-block of 32",
+      "words": {
+        "a": 16384,
+        "b": 16384,
+        "c": 16384
+      },
+      "seed": "0xA3E00004"
+    },
+    {
+      "case_id": "005",
+      "name": "partial_n",
+      "why": "N=13：输出宽度不满且是质数。N 方向的部分 tile 与 M 方向走的是不同的硬件路径（一个是行数，一个是列数），必须分开验。",
+      "dtype": {
+        "a": "bf16",
+        "b": "bf16",
+        "c": "fp32"
+      },
+      "shape": {
+        "M": 128,
+        "N": 13,
+        "K": 32
+      },
+      "tile": {
+        "mtilem": 128,
+        "mtilen": 13,
+        "mtilek": 32,
+        "n_mfmacc": 1
+      },
+      "segments": {
+        "text": "0x80000000",
+        "a": "0x80001000",
+        "b": "0x80050000",
+        "c": "0x800A0000",
+        "ref": "0x800B0000",
+        "done": "0x800C0000",
+        "status": "0x800C0004",
+        "failidx": "0x800C0008",
+        "a_src": "0x800D0000",
+        "xor": "0x80160000",
+        "xor_ref": "0x80160004",
+        "stage_a": "0x80160008",
+        "stage_b": "0x8016000C",
+        "probe1": "0x80160010",
+        "probe2": "0x80160014",
+        "probe_eq": "0x80160018",
+        "trap_cause": "0x8016001C",
+        "trap_epc": "0x80160020",
+        "trap_tval": "0x80160024"
+      },
+      "markers": {
+        "done_magic": "0x600D600D",
+        "status_pass": "0x50415353",
+        "status_fail": "0x4641494C",
+        "c_preset": "0xA5A5A5A5"
+      },
+      "csr": {
+        "mtilem": "0x803",
+        "mtilen": "0x804",
+        "mtilek": "0x805"
+      },
+      "stride_bytes": {
+        "a": 64,
+        "b": 64,
+        "c": 52
+      },
+      "stride_elems": {
+        "a": 32,
+        "b": 32,
+        "c": 13
+      },
+      "row_gap_elems": {
+        "a": 0,
+        "b": 0
+      },
+      "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+      "cancellation": {
+        "median_ratio": 1.0,
+        "max_ratio": 287.0,
+        "hot_points": [
+          {
+            "m": 60,
+            "n": 8,
+            "ratio": 287.0,
+            "peak": 28.871917724609375,
+            "value": 0.10061454772949219
+          }
+        ],
+        "note": "ratio = peak_partial_sum / |final|. Use normalized error (|got-ref| / c_peak) as the criterion; ULP counts are meaningless where ratio is large."
+      },
+      "norm_tol": 2.384185791015625e-07,
+      "norm_tol_note": "2 * n_roundings(2) * 2^-24; hardware rounds every 16 elements (ARRAY_K_FP), not an arbitrary constant",
+      "rounding": "block-exact then FP32 RNE per K-block of 32",
+      "words": {
+        "a": 2048,
+        "b": 208,
+        "c": 1664
+      },
+      "seed": "0xA3E00005"
+    },
+    {
+      "case_id": "006",
+      "name": "partial_k",
+      "why": "K=17：单块内 K 不满。累加长度不足时，剩余的乘法单元必须贡献 0 而非残留值 —— 这类错误在 K=32 满块时完全看不出来。行 stride 补到 18 个元素以对齐 4 字节。",
+      "dtype": {
+        "a": "bf16",
+        "b": "bf16",
+        "c": "fp32"
+      },
+      "shape": {
+        "M": 128,
+        "N": 128,
+        "K": 17
+      },
+      "tile": {
+        "mtilem": 128,
+        "mtilen": 128,
+        "mtilek": 17,
+        "n_mfmacc": 1
+      },
+      "segments": {
+        "text": "0x80000000",
+        "a": "0x80001000",
+        "b": "0x80050000",
+        "c": "0x800A0000",
+        "ref": "0x800B0000",
+        "done": "0x800C0000",
+        "status": "0x800C0004",
+        "failidx": "0x800C0008",
+        "a_src": "0x800D0000",
+        "xor": "0x80160000",
+        "xor_ref": "0x80160004",
+        "stage_a": "0x80160008",
+        "stage_b": "0x8016000C",
+        "probe1": "0x80160010",
+        "probe2": "0x80160014",
+        "probe_eq": "0x80160018",
+        "trap_cause": "0x8016001C",
+        "trap_epc": "0x80160020",
+        "trap_tval": "0x80160024"
+      },
+      "markers": {
+        "done_magic": "0x600D600D",
+        "status_pass": "0x50415353",
+        "status_fail": "0x4641494C",
+        "c_preset": "0xA5A5A5A5"
+      },
+      "csr": {
+        "mtilem": "0x803",
+        "mtilen": "0x804",
+        "mtilek": "0x805"
+      },
+      "stride_bytes": {
+        "a": 36,
+        "b": 36,
+        "c": 512
+      },
+      "stride_elems": {
+        "a": 18,
+        "b": 18,
+        "c": 128
+      },
+      "row_gap_elems": {
+        "a": 1,
+        "b": 1
+      },
+      "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+      "cancellation": {
+        "median_ratio": 1.0,
+        "max_ratio": 246.8,
+        "hot_points": [
+          {
+            "m": 22,
+            "n": 122,
+            "ratio": 246.8,
+            "peak": 9.033710479736328,
+            "value": 0.036602020263671875
+          },
+          {
+            "m": 56,
+            "n": 96,
+            "ratio": 178.3,
+            "peak": 1.1777496337890625,
+            "value": 0.0066070556640625
+          },
+          {
+            "m": 75,
+            "n": 83,
+            "ratio": 126.9,
+            "peak": 14.772287368774414,
+            "value": -0.11638450622558594
+          }
+        ],
+        "note": "ratio = peak_partial_sum / |final|. Use normalized error (|got-ref| / c_peak) as the criterion; ULP counts are meaningless where ratio is large."
+      },
+      "norm_tol": 2.384185791015625e-07,
+      "norm_tol_note": "2 * n_roundings(2) * 2^-24; hardware rounds every 16 elements (ARRAY_K_FP), not an arbitrary constant",
+      "rounding": "block-exact then FP32 RNE per K-block of 32",
+      "words": {
+        "a": 1152,
+        "b": 1152,
+        "c": 16384
+      },
+      "seed": "0xA3E00006"
+    },
+    {
+      "case_id": "007",
+      "name": "stride_gap",
+      "why": "A/B 的行 stride 大于实际列数（各留 16 个元素空隙）。验证装载严格按 stride 寻址。忽略 stride 的实现在前面所有 case 上都是对的，只有这里会错。",
+      "dtype": {
+        "a": "bf16",
+        "b": "bf16",
+        "c": "fp32"
+      },
+      "shape": {
+        "M": 128,
+        "N": 128,
+        "K": 32
+      },
+      "tile": {
+        "mtilem": 128,
+        "mtilen": 128,
+        "mtilek": 32,
+        "n_mfmacc": 1
+      },
+      "segments": {
+        "text": "0x80000000",
+        "a": "0x80001000",
+        "b": "0x80050000",
+        "c": "0x800A0000",
+        "ref": "0x800B0000",
+        "done": "0x800C0000",
+        "status": "0x800C0004",
+        "failidx": "0x800C0008",
+        "a_src": "0x800D0000",
+        "xor": "0x80160000",
+        "xor_ref": "0x80160004",
+        "stage_a": "0x80160008",
+        "stage_b": "0x8016000C",
+        "probe1": "0x80160010",
+        "probe2": "0x80160014",
+        "probe_eq": "0x80160018",
+        "trap_cause": "0x8016001C",
+        "trap_epc": "0x80160020",
+        "trap_tval": "0x80160024"
+      },
+      "markers": {
+        "done_magic": "0x600D600D",
+        "status_pass": "0x50415353",
+        "status_fail": "0x4641494C",
+        "c_preset": "0xA5A5A5A5"
+      },
+      "csr": {
+        "mtilem": "0x803",
+        "mtilen": "0x804",
+        "mtilek": "0x805"
+      },
+      "stride_bytes": {
+        "a": 96,
+        "b": 96,
+        "c": 512
+      },
+      "stride_elems": {
+        "a": 48,
+        "b": 48,
+        "c": 128
+      },
+      "row_gap_elems": {
+        "a": 16,
+        "b": 16
+      },
+      "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+      "cancellation": {
+        "median_ratio": 1.0,
+        "max_ratio": 57.0,
+        "hot_points": [],
+        "note": "ratio = peak_partial_sum / |final|. Use normalized error (|got-ref| / c_peak) as the criterion; ULP counts are meaningless where ratio is large."
+      },
+      "norm_tol": 2.384185791015625e-07,
+      "norm_tol_note": "2 * n_roundings(2) * 2^-24; hardware rounds every 16 elements (ARRAY_K_FP), not an arbitrary constant",
+      "rounding": "block-exact then FP32 RNE per K-block of 32",
+      "words": {
+        "a": 3072,
+        "b": 3072,
+        "c": 16384
+      },
+      "seed": "0xA3E00007"
+    },
+    {
+      "case_id": "008",
+      "name": "massive_act",
+      "why": "Qwen3 深层实测的真实数值分布：多数元素在 1 附近，少数维度出现 ±6912 的 outlier（Transformer 深层的已知现象）。K=1024 为真实值。这条同时压测动态范围与 32 次连续累加，最接近硬件在真机上的实际负载。",
+      "dtype": {
+        "a": "bf16",
+        "b": "bf16",
+        "c": "fp32"
+      },
+      "shape": {
+        "M": 128,
+        "N": 128,
+        "K": 1024
+      },
+      "tile": {
+        "mtilem": 128,
+        "mtilen": 128,
+        "mtilek": 32,
+        "n_mfmacc": 32
+      },
+      "segments": {
+        "text": "0x80000000",
+        "a": "0x80001000",
+        "b": "0x80050000",
+        "c": "0x800A0000",
+        "ref": "0x800B0000",
+        "done": "0x800C0000",
+        "status": "0x800C0004",
+        "failidx": "0x800C0008",
+        "a_src": "0x800D0000",
+        "xor": "0x80160000",
+        "xor_ref": "0x80160004",
+        "stage_a": "0x80160008",
+        "stage_b": "0x8016000C",
+        "probe1": "0x80160010",
+        "probe2": "0x80160014",
+        "probe_eq": "0x80160018",
+        "trap_cause": "0x8016001C",
+        "trap_epc": "0x80160020",
+        "trap_tval": "0x80160024"
+      },
+      "markers": {
+        "done_magic": "0x600D600D",
+        "status_pass": "0x50415353",
+        "status_fail": "0x4641494C",
+        "c_preset": "0xA5A5A5A5"
+      },
+      "csr": {
+        "mtilem": "0x803",
+        "mtilen": "0x804",
+        "mtilek": "0x805"
+      },
+      "stride_bytes": {
+        "a": 2048,
+        "b": 2048,
+        "c": 512
+      },
+      "stride_elems": {
+        "a": 1024,
+        "b": 1024,
+        "c": 128
+      },
+      "row_gap_elems": {
+        "a": 0,
+        "b": 0
+      },
+      "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+      "cancellation": {
+        "median_ratio": 1.49,
+        "max_ratio": 31372.8,
+        "hot_points": [
+          {
+            "m": 126,
+            "n": 63,
+            "ratio": 31372.8,
+            "peak": 44864.87890625,
+            "value": 1.430058479309082
+          },
+          {
+            "m": 83,
+            "n": 55,
+            "ratio": 7717.4,
+            "peak": 41787.5,
+            "value": 5.4147186279296875
+          },
+          {
+            "m": 22,
+            "n": 47,
+            "ratio": 5747.2,
+            "peak": 45569.8671875,
+            "value": -7.929069519042969
+          },
+          {
+            "m": 107,
+            "n": 61,
+            "ratio": 3310.6,
+            "peak": 38239.87890625,
+            "value": -11.550666809082031
+          },
+          {
+            "m": 16,
+            "n": 35,
+            "ratio": 2990.1,
+            "peak": 40743.7265625,
+            "value": 13.626007080078125
+          },
+          {
+            "m": 58,
+            "n": 77,
+            "ratio": 2110.7,
+            "peak": 30604.068359375,
+            "value": 14.499496459960938
+          },
+          {
+            "m": 63,
+            "n": 12,
+            "ratio": 1626.6,
+            "peak": 58107.6328125,
+            "value": 35.72254943847656
+          },
+          {
+            "m": 72,
+            "n": 75,
+            "ratio": 1448.7,
+            "peak": 42353.0234375,
+            "value": -29.23528289794922
+          },
+          {
+            "m": 48,
+            "n": 89,
+            "ratio": 1335.0,
+            "peak": 14619.1083984375,
+            "value": -10.950995445251465
+          },
+          {
+            "m": 123,
+            "n": 104,
+            "ratio": 1334.4,
+            "peak": 44729.8203125,
+            "value": 33.52035903930664
+          },
+          {
+            "m": 100,
+            "n": 34,
+            "ratio": 1305.3,
+            "peak": 37645.55078125,
+            "value": 28.83958625793457
+          },
+          {
+            "m": 74,
+            "n": 75,
+            "ratio": 1132.5,
+            "peak": 22760.4921875,
+            "value": -20.09668731689453
+          },
+          {
+            "m": 85,
+            "n": 63,
+            "ratio": 1083.5,
+            "peak": 41690.28125,
+            "value": 38.478790283203125
+          },
+          {
+            "m": 94,
+            "n": 74,
+            "ratio": 985.2,
+            "peak": 28950.478515625,
+            "value": -29.385692596435547
+          },
+          {
+            "m": 62,
+            "n": 123,
+            "ratio": 954.7,
+            "peak": 47252.59375,
+            "value": -49.49233627319336
+          },
+          {
+            "m": 105,
+            "n": 53,
+            "ratio": 867.2,
+            "peak": 23236.626953125,
+            "value": 26.79388999938965
+          }
+        ],
+        "note": "ratio = peak_partial_sum / |final|. Use normalized error (|got-ref| / c_peak) as the criterion; ULP counts are meaningless where ratio is large."
+      },
+      "norm_tol": 7.62939453125e-06,
+      "norm_tol_note": "2 * n_roundings(64) * 2^-24; hardware rounds every 16 elements (ARRAY_K_FP), not an arbitrary constant",
+      "rounding": "block-exact then FP32 RNE per K-block of 32",
+      "words": {
+        "a": 65536,
+        "b": 65536,
+        "c": 16384
+      },
+      "seed": "0xA3E00008"
+    },
+    {
+      "case_id": "009a",
+      "name": "rvv_ame_handoff_cbo",
+      "why": "RVV 与 AME 的双向数据交接，缓存同步用标准 Zicbom（cbo.clean/inval）。\n拆成两段各自报状态，否则失败时分不清是哪个方向坏的：\n  阶段A  RVV 写 BF16 -> clean -> AME 读。失败 => clean 没生效\n  阶段B  AME 写 C -> inval -> RVV 读并 XOR 归约。失败 => inval 没生效\n这是真实负载的形态：模型里 RVV 与 AME 每层都要交替七次。",
+      "mixed": true,
+      "kind": "handoff",
+      "cache_ops": "Zicbom cbo.clean/cbo.inval",
+      "march_needs": "_zicbom",
+      "dtype": {
+        "a_src": "fp32",
+        "a": "bf16 (RVV 运行时生成)",
+        "b": "bf16",
+        "c": "fp32"
+      },
+      "shape": {
+        "M": 32,
+        "N": 128,
+        "K": 256
+      },
+      "tile": {
+        "mtilem": 32,
+        "mtilen": 128,
+        "mtilek": 32,
+        "n_mfmacc": 8
+      },
+      "segments": {
+        "text": "0x80000000",
+        "a": "0x80001000",
+        "b": "0x80050000",
+        "c": "0x800A0000",
+        "ref": "0x800B0000",
+        "done": "0x800C0000",
+        "status": "0x800C0004",
+        "failidx": "0x800C0008",
+        "a_src": "0x800D0000",
+        "xor": "0x80160000",
+        "xor_ref": "0x80160004",
+        "stage_a": "0x80160008",
+        "stage_b": "0x8016000C",
+        "probe1": "0x80160010",
+        "probe2": "0x80160014",
+        "probe_eq": "0x80160018",
+        "trap_cause": "0x8016001C",
+        "trap_epc": "0x80160020",
+        "trap_tval": "0x80160024"
+      },
+      "markers": {
+        "done_magic": "0x600D600D",
+        "status_pass": "0x50415353",
+        "status_fail": "0x4641494C",
+        "c_preset": "0xA5A5A5A5",
+        "a_preset": "0x5A5A"
+      },
+      "xor_ref": "0x00272B66",
+      "verdict": "看 status 与 stage_a/stage_b",
+      "stride_bytes": {
+        "a": 512,
+        "b": 512,
+        "c": 512
+      },
+      "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+      "rounding": "block-exact then FP32 RNE per K-block of 32; FP32->BF16 by RNE (frm=0)",
+      "norm_tol": 1.9073486328125e-06,
+      "norm_tol_note": "2 * n_roundings(16) * 2^-24; criterion is |got-ref| / c_peak <= norm_tol",
+      "seed": "0xA3E00009"
+    },
+    {
+      "case_id": "009b",
+      "name": "rvv_ame_handoff_l1d",
+      "why": "与 009a 指令序列完全相同，只把缓存维护换成 xdcache 的全量指令\n（l1d_clean_all / l1d_inv_all）。\n两个变体都要过：软件侧 QEMU 走 cbo、真机走 l1d_*_all，\nRTL 若只实现其中一套，我们要到上板那天才会发现。\n注意 l1d_inv_all 会丢弃脏行，故程序里它前面必有 l1d_clean_all。",
+      "mixed": true,
+      "kind": "handoff",
+      "cache_ops": "xdcache l1d_clean_all/l1d_inv_all",
+      "march_needs": "_xdcache",
+      "dtype": {
+        "a_src": "fp32",
+        "a": "bf16 (RVV 运行时生成)",
+        "b": "bf16",
+        "c": "fp32"
+      },
+      "shape": {
+        "M": 32,
+        "N": 128,
+        "K": 256
+      },
+      "tile": {
+        "mtilem": 32,
+        "mtilen": 128,
+        "mtilek": 32,
+        "n_mfmacc": 8
+      },
+      "segments": {
+        "text": "0x80000000",
+        "a": "0x80001000",
+        "b": "0x80050000",
+        "c": "0x800A0000",
+        "ref": "0x800B0000",
+        "done": "0x800C0000",
+        "status": "0x800C0004",
+        "failidx": "0x800C0008",
+        "a_src": "0x800D0000",
+        "xor": "0x80160000",
+        "xor_ref": "0x80160004",
+        "stage_a": "0x80160008",
+        "stage_b": "0x8016000C",
+        "probe1": "0x80160010",
+        "probe2": "0x80160014",
+        "probe_eq": "0x80160018",
+        "trap_cause": "0x8016001C",
+        "trap_epc": "0x80160020",
+        "trap_tval": "0x80160024"
+      },
+      "markers": {
+        "done_magic": "0x600D600D",
+        "status_pass": "0x50415353",
+        "status_fail": "0x4641494C",
+        "c_preset": "0xA5A5A5A5",
+        "a_preset": "0x5A5A"
+      },
+      "xor_ref": "0x00272B66",
+      "verdict": "看 status 与 stage_a/stage_b",
+      "stride_bytes": {
+        "a": 512,
+        "b": 512,
+        "c": 512
+      },
+      "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+      "rounding": "block-exact then FP32 RNE per K-block of 32; FP32->BF16 by RNE (frm=0)",
+      "norm_tol": 1.9073486328125e-06,
+      "norm_tol_note": "2 * n_roundings(16) * 2^-24; criterion is |got-ref| / c_peak <= norm_tol",
+      "seed": "0xA3E00009"
+    },
+    {
       "case_id": "010",
       "name": "sync_sensitivity",
       "why": "同一计算做两遍：第一遍带完整同步，第二遍故意去掉所有 cache 操作，\n把两次的 XOR 校验和都回填，并给出是否相同。\n★ 第二遍不作判据 —— 它依赖 cache 当时的状态，通过与否都不能证明什么。\n  两次不同 => 证明软件同步确实必要、序列也确实有效\n  两次相同 => **不能**推出'不需要同步'，可能只是数据恰好未驻留 cache\n它把'到底需不需要软件维护一致性'从口头约定变成可测量的事实。",
@@ -54,7 +1001,7 @@
         "c_preset": "0xA5A5A5A5",
         "a_preset": "0x5A5A"
       },
-      "xor_ref": "0x0740BEF8",
+      "xor_ref": "0x0740BC93",
       "verdict": "status 为判据；probe1/probe2/probe_eq 仅为观察项，不判成败",
       "stride_bytes": {
         "a": 512,
@@ -63,7 +1010,75 @@
       },
       "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
       "rounding": "block-exact then FP32 RNE per K-block of 32; FP32->BF16 by RNE (frm=0)",
+      "norm_tol": 1.9073486328125e-06,
+      "norm_tol_note": "2 * n_roundings(16) * 2^-24; criterion is |got-ref| / c_peak <= norm_tol",
       "seed": "0xA3E0000A"
+    },
+    {
+      "case_id": "011",
+      "name": "fence_ordering",
+      "why": "验证硬件团队的断言：fence rw,rw 覆盖 AME 的访存缓冲，\nfence 退休即代表 AME 的写已落到 DDR。\nAME 写完后立刻读同一地址，带 fence 与不带各做一次并回填结果。\n★ 不带 fence 的那次同样不作判据：结果依赖流水线时序与写缓冲深度，\n  当判据只会得到随机的红绿灯。软件的正确性完全建立在这条断言上，\n  所以它需要被验证，而不是被假定。",
+      "mixed": true,
+      "kind": "fence_ordering",
+      "cache_ops": "Zicbom cbo.clean/cbo.inval",
+      "march_needs": "_zicbom",
+      "dtype": {
+        "a_src": "fp32",
+        "a": "bf16 (RVV 运行时生成)",
+        "b": "bf16",
+        "c": "fp32"
+      },
+      "shape": {
+        "M": 32,
+        "N": 128,
+        "K": 256
+      },
+      "tile": {
+        "mtilem": 32,
+        "mtilen": 128,
+        "mtilek": 32,
+        "n_mfmacc": 8
+      },
+      "segments": {
+        "text": "0x80000000",
+        "a": "0x80001000",
+        "b": "0x80050000",
+        "c": "0x800A0000",
+        "ref": "0x800B0000",
+        "done": "0x800C0000",
+        "status": "0x800C0004",
+        "failidx": "0x800C0008",
+        "a_src": "0x800D0000",
+        "xor": "0x80160000",
+        "xor_ref": "0x80160004",
+        "stage_a": "0x80160008",
+        "stage_b": "0x8016000C",
+        "probe1": "0x80160010",
+        "probe2": "0x80160014",
+        "probe_eq": "0x80160018",
+        "trap_cause": "0x8016001C",
+        "trap_epc": "0x80160020",
+        "trap_tval": "0x80160024"
+      },
+      "markers": {
+        "done_magic": "0x600D600D",
+        "status_pass": "0x50415353",
+        "status_fail": "0x4641494C",
+        "c_preset": "0xA5A5A5A5",
+        "a_preset": "0x5A5A"
+      },
+      "xor_ref": "0x00A88E01",
+      "verdict": "status 为判据；probe1/probe2/probe_eq 仅为观察项，不判成败",
+      "stride_bytes": {
+        "a": 512,
+        "b": 512,
+        "c": 512
+      },
+      "layout": "C = A · Bt ; A is [M,K], B is [N,K] (NOT [K,N])",
+      "rounding": "block-exact then FP32 RNE per K-block of 32; FP32->BF16 by RNE (frm=0)",
+      "norm_tol": 1.9073486328125e-06,
+      "norm_tol_note": "2 * n_roundings(16) * 2^-24; criterion is |got-ref| / c_peak <= norm_tol",
+      "seed": "0xA3E0000B"
     }
   ]
 }

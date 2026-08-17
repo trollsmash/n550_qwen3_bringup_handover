@@ -1,6 +1,6 @@
 # 源码与重新编译
 
-208K，包含 L0/L2/L3 全部源码。改完能自己编出镜像，
+212K，包含 L0/L2/L3 全部源码。改完能自己编出镜像，
 不必回头找软件侧。
 
 ## 目录
@@ -11,6 +11,7 @@ src/
 ├── bsp/start.S          启动代码 + trap handler（异常时打印 mcause/mepc/mtval）
 ├── qwen3.c              模型前向，28 层循环
 ├── kernels_ame.c        ★ AME GEMM + 与 L1D 的缓存同步
+├── kernels_hwsim.c      在 PC 上复刻 RTL 累加语义，用于不上板预测数值行为
 ├── ops_rvv.c            RVV 实现的 rmsnorm/rope/softmax/silu 等
 ├── tokenizer.c          BPE 分词
 ├── main_baremetal.c     ★ L2/L3 的入口，prompt 和生成长度在这里
@@ -47,6 +48,22 @@ rv64gcv_zfh_zfbfmin_zvfh_zvfbfmin_zvfbfwma_xewmatrix1p0_zicbom_zicbop_zicboz_xdc
 | 串口没输出，要配波特率 | 编译时加 `-DUART_NEEDS_INIT -DUART_DIVISOR=<值>`，见 `tests/bringup.c` |
 | demo 生成几个 token | `src/main_baremetal.c` 的 `CHAT_MAX_GEN`（默认 1） |
 | demo 问什么问题 | `src/main_baremetal.c` 的 `DEMO_PROMPT` |
+
+## 数值语义：真机与 QEMU 并不相同
+
+AMU 的 PE 一次吃 **16** 路乘积（`ma_pkg.sv` 的 `ARRAY_K_FP`），每个 `k_iter`
+结束就把累加器写回 AR（FP32）。也就是说 `mtilek=32` 的一条 `mfmacc`
+内部会舍入**两次**。而 QEMU 的粒度是 32，只舍入一次 —— 两者对同一条指令
+给出的结果不逐位相同。
+
+这对 demo 没有影响：用 `src/kernels_hwsim.c`（复刻 RTL 语义）在 PC 上跑
+完整模型，生成的 token 与黄金数据完全一致。但如果你要做**逐位**的数值比对，
+记住以 RTL 为准，别拿 QEMU 的输出当标准答案。
+
+```bash
+gcc -O2 -Isrc -o q_hwsim src/main.c src/qwen3.c src/tokenizer.c     src/kernels_hwsim.c src/ops_scalar.c -lm
+./q_hwsim golden/qwen3-0.6b-bf16.bin 4        # 应输出 3837 101889 106525 56568
+```
 
 **改 `board.h` 之后地址表会自动跟着变** —— 构建脚本用 `cpp` 从
 `board.h` 展开取值，不存在"改了代码忘了改文档"。
