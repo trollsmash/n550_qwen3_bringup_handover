@@ -55,7 +55,7 @@ rv64gcv_zfh_zfbfmin_zvfh_zvfbfmin_zvfbfwma_xewmatrix1p0_zicbom_zicbop_zicboz_xdc
 | 想改什么 | 改哪里 |
 |---|---|
 | DDR / UART / 权重地址 | `src/bsp/board.h` 的 `BOARD_*`（S2C 段） |
-| 串口没输出 | 先确认寄存器位宽/间距：程序按 32 位、间距 4 字节访问，见 `board.h` 的 `BOARD_UART_32BIT` / `BOARD_UART_REG_SHIFT` |
+| 串口没输出 | 寄存器排布已确认（DW_apb_uart，32 位、间距 4 字节），程序即按此编译；先查线序/电平与 UART 时钟 |
 | 串口乱码 | 波特率按 UART 输入时钟 **40 MHz** 配（DLL=21 + DLF=11，误差 +0.06%）。若实际时钟不同，改 `board.h` 的 `BOARD_UART_CLK_HZ` 重编。这里 DLF 不能省：只用整数分频偏 +3.34%，已超 16550 容限 |
 | demo 生成几个 token | `src/main_baremetal.c` 的 `CHAT_MAX_GEN`（默认 1） |
 | demo 问什么问题 | `src/main_baremetal.c` 的 `DEMO_PROMPT` |

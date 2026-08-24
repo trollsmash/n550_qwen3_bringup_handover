@@ -1,5 +1,5 @@
 # 文件清单（给人看的；机器校验用 checksums.md5）
-# 生成时间 2026-08-24 11:56
+# 生成时间 2026-08-24 15:50
 #
 # 注意：w.bin (1.11 GB) 不在本仓库，也不在下面的清单里。
 #       它的大小与 md5 见 L2_L3_fullmodel/GET_WEIGHTS.md，请单独核对。
@@ -7,12 +7,12 @@
 # 校验：md5sum -c checksums.md5
 
         字节  文件
-          4000  L0_bringup/bringup_s2c.bin
-         59809  L0_bringup/bringup_s2c.diss
+          3992  L0_bringup/bringup_s2c.bin
+         59997  L0_bringup/bringup_s2c.diss
          57888  L0_bringup/bringup_s2c.elf
            969  L0_bringup/bringup_s2c.sym
-         11676  L0_bringup/checklist.html
-          6226  L0_bringup/checklist.md
+         11653  L0_bringup/checklist.html
+          6236  L0_bringup/checklist.md
            820  L1_ame_vectors/BUILD_INFO.txt
          22989  L1_ame_vectors/README.html
          16085  L1_ame_vectors/README.md
@@ -197,20 +197,20 @@
           3549  L1_ame_vectors/golden_src/41_build_vectors.sh
          32090  L1_ame_vectors/index.json
            570  L2_L3_fullmodel/addresses.txt
-         16632  L2_L3_fullmodel/qwen3_s2c.bin
-        311809  L2_L3_fullmodel/qwen3_s2c.diss
+         16624  L2_L3_fullmodel/qwen3_s2c.bin
+        311995  L2_L3_fullmodel/qwen3_s2c.diss
         186304  L2_L3_fullmodel/qwen3_s2c.elf
           2742  L2_L3_fullmodel/qwen3_s2c.sym
        3409013  L2_L3_fullmodel/tok.bin
           8090  README.html
           4086  README.md
            570  addresses.txt
-          4729  src/BUILD.md
+          4720  src/BUILD.md
           2845  src/src/Makefile
-         16803  src/src/bsp/board.h
+         18256  src/src/bsp/board.h
            599  src/src/bsp/libm_stub.c
           1337  src/src/bsp/qemu_virt.ld
-          5810  src/src/bsp/start.S
+          7223  src/src/bsp/start.S
           2444  src/src/bsp/string_min.c
           2897  src/src/kernels.h
           7822  src/src/kernels_ame.c

@@ -87,6 +87,8 @@
 #ifndef BOARD_UART_32BIT
 #define BOARD_UART_32BIT      1
 #endif
+/* 寄存器按 32 位排布、间距 4 字节（已向硬件确认）。
+ * 于是 index n 的字节偏移 = n << 2，与 DW_apb_uart 的寄存器映射一致。 */
 #ifndef BOARD_UART_REG_SHIFT
 #define BOARD_UART_REG_SHIFT  2
 #endif
@@ -110,16 +112,26 @@
 /* 本板的 UART 需要程序自己配波特率，不能指望 bootrom 已配好。 */
 #define BOARD_UART_NEEDS_INIT 1
 
-/* DLF（Divisor Latch Fraction）—— Synopsys DW_apb_uart 的小数分频寄存器。
- * 标准 16550 没有它；有了它才能在 40 MHz 这种除不尽的时钟下配准波特率。
+/* DLF（Divisor Latch Fraction）—— 小数分频寄存器。
+ * 本板 UART 用的是 **Synopsys DW_apb_uart**（已确认），所以这个寄存器存在；
+ * 标准 16550 是没有它的。有了它才能在 40 MHz 这种除不尽的时钟下配准波特率。
  *
  * 在本板上它不是锦上添花而是必需：40 MHz 下理想分频 21.70，
  * 只用整数分频取 21 偏 +3.34%，**已超出 16550 常见的 ±2~3% 容限**；
  * 补上 DLF 后偏差降到 +0.06%。
  *
- *   寄存器索引 48（字节偏移 0xC0 = 48 << REG_SHIFT(2)）
- *   位宽默认按 4 位（DLF_SIZE=4）。若你们的 IP 配置不同，改 DLF_BITS 即可 ——
- *   位宽填错只影响精度，不会让串口完全不工作，现象是偶发错帧。
+ *   位置：寄存器索引 48，字节偏移 0xC0 = 48 << REG_SHIFT(2)，
+ *         即 DW_apb_uart 手册里 DLF 的标准偏移。
+ *
+ * ── 两个"位宽"别搞混 ──
+ *   访问宽度   32 位 / 4 字节，与其它 UART 寄存器一样 -> BOARD_UART_32BIT
+ *   有效位数   DW_apb_uart 的综合参数 DLF_SIZE，决定小数的分母是 2^N
+ *              -> BOARD_UART_DLF_BITS，本板为 4（已确认），分母 16
+ *   前者说的是怎么访问，后者说的是里面实际实现了几位，两者没有关系。
+ *
+ * 万一位数填错也不会让串口哑掉，只影响精度：写进去的值超出实际位数时高位
+ * 被硬件丢弃 —— 按 4 位算出 11 而实际只有 3 位的话，硬件收到 11 & 7 = 3，
+ * 波特率 116959（+1.53%），仍在 16550 容限内。
  *
  * 访问时机：DLL/DLM 需要 LCR.DLAB=1，而 DLF 不需要，
  * 因此在恢复 DLAB=0 之后再写它。 */
@@ -311,6 +323,16 @@
          __asm__ volatile("l1d_clean_all\n\tl1d_inv_all" ::: "memory");      \
     } while (0)
 #define BOARD_FENCE()             __asm__ volatile("fence rw,rw" ::: "memory")
+
+/* ★ 关于 fence.i：本核的实现是**先对 D-cache 做 clean all，再失效整个
+ * I-cache**。它不是一条纯粹的取指同步指令 —— 它会把脏行写回 DDR。
+ *
+ * 后果与上面 INVAL 宏要防的是同一类问题：AME 写过的输出缓冲，若之后执行
+ * fence.i，CPU 侧残留的旧脏行会被写回，把 AME 的结果盖掉。
+ *
+ * 目前全项目只有 start.S 在复位处用了一次 fence.i，且已在它之前先做
+ * l1d_inv_all 把 cache 清空。若将来要动态加载代码（自修改、加载 overlay），
+ * 用 fence.i 之前务必确认此刻 D-cache 里没有不能被写回的内容。 */
 
 #elif BOARD_NEEDS_CACHE_SYNC
 #define BOARD_CBO_RANGE(op, p, bytes)                                        \

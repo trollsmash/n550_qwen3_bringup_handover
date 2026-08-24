@@ -10,21 +10,43 @@
     .section .text.init, "ax"
     .global _start
 _start:
-    /* 只让 hart 0 继续，其余核原地睡眠 */
+    /* ══════════ 复位后第一件事：丢掉 cache 里的一切 ══════════
+     *
+     * 镜像是 host 经 PCIe 后门直接写进 DDR 的，绕开了 CPU 的 cache。
+     * 软复位不一定清 L1，于是上一次运行的内容可能还留在里面。
+     * bring-up 时反复换镜像正是这个场景：
+     *   写镜像 A -> 跑 -> 写镜像 B 到同一地址 -> 软复位
+     * 旧行若还在，CPU 就接着跑旧程序，现象是"明明重新烧了，行为却没变"。
+     *
+     * ★★ 这两条的顺序不能反 ★★
+     *
+     * 本核的 fence.i 实现是：**先对 D-cache 做 clean all，再失效整个
+     * I-cache**。也就是说 fence.i 自己会把 D-cache 里的脏行写回 DDR。
+     * 若先 fence.i，上一次运行残留的脏行就会被写回，**盖掉后门刚写进去
+     * 的新镜像** —— 这是破坏性的，且现象与"程序有 bug"无法区分。
+     *
+     * 所以必须先 l1d_inv_all：复位后 DDR 里才是权威内容，cache 里的一切
+     * 都是垃圾，直接丢弃（inv_all 不写回，正是这里要的语义）。等 D-cache
+     * 空了，再让 fence.i 去做它该做的 I-cache 失效。
+     *
+     * 局限：fence.i 管不了它**自己之前**的取指。若 I-cache 里 _start 开头
+     * 这几条就是旧指令，CPU 根本执行不到这里。那种情况只能靠硬件复位清
+     * I-cache，软件无能为力 —— 值得向 FPGA 团队确认复位是否清 L1I。
+     *
+     * QEMU 没有 xdcache，l1d_inv_all 在那边是非法指令，故条件编译。
+     * QEMU 的镜像由 generic loader 装载，也不存在陈旧 cache 的问题。 */
+#ifdef BOARD_USE_L1D_ALL
+    l1d_inv_all
+    /* 与下面的 fence.i 隔开：inv_all 和 fence.i 内部那次 clean all 之间
+     * 没有架构层面的顺序保证，万一 clean 跑到 inv 前面就前功尽弃。 */
+    fence   rw, rw
+#endif
+    fence.i
+
+    /* 只让 hart 0 继续，其余核原地睡眠。
+     * 放在 cache 清理之后：每个核清的都是自己的私有 L1，各清各的无副作用。 */
     csrr    t0, mhartid
     bnez    t0, park
-
-    /* 同步指令缓存。
-     * 本核有 32 KB L1I，且 I-cache 与 D-cache 之间不自动保持一致。
-     * 我们的镜像是 host 经 PCIe 后门写进 DDR 的 —— 对 CPU 来说这就是
-     * "动态加载指令"，与自修改代码同类。
-     *
-     * 真正会咬人的场景是 bring-up 时反复换镜像：
-     *   写镜像 A -> 跑 -> 写镜像 B 到同一地址 -> 软复位
-     * 若 I-cache 里还留着 A 的指令，CPU 会接着执行旧程序，
-     * 现象是"明明重新烧了，行为却没变"，越是反复调试越容易撞上。
-     * 一条 fence.i 就能排除这种可能，代价可以忽略。 */
-    fence.i
 
     /* 初始化 gp（global pointer）。
      * 编译器会把小的全局变量改成 gp 相对寻址访问，gp 没设就是往垃圾地址读写，
