@@ -315,8 +315,13 @@
 #define BOARD_DCACHE_CLEAN(p, n)                                             \
     do { (void)(p); (void)(n);                                               \
          __asm__ volatile("l1d_clean_all" ::: "memory"); } while (0)
-/* 全量 clean 已把所有脏行写回，与 FLUSH 语义在此等价。 */
-#define BOARD_DCACHE_FLUSH(p, n)  BOARD_DCACHE_CLEAN(p, n)
+/* 写回并失效。本核没有单条 flush，用 clean_all + inv_all 组合表达，
+ * 与 Zicbom 的 cbo.flush 语义对齐：不丢数据，且拷贝确实被失效。
+ *
+ * ★ 不能只做 clean_all。那样脏行虽然写回了 DDR，**拷贝仍留在 cache 里**，
+ *   随后的读依旧命中旧拷贝 —— 写方向没问题，读方向完全失效。
+ *   需要"读到别人（host/AME）写进 DDR 的新值"时，必须用这个而不是 CLEAN。 */
+#define BOARD_DCACHE_FLUSH(p, n)  BOARD_DCACHE_INVAL(p, n)
 /* ★ 先 clean 再 inv：inv 丢弃脏行，不先写回就会丢掉栈上的数据。 */
 #define BOARD_DCACHE_INVAL(p, n)                                             \
     do { (void)(p); (void)(n);                                               \

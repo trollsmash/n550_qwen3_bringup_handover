@@ -167,8 +167,13 @@ static uint32_t rd32(const uint8_t *p) {
  * 输出形如 [....|....|....|....|....|...] ，每 5 层一个分隔符便于数。 */
 /* ---- 与 host 的 mailbox。PCIe 后门可回读 DDR，所以即使串口没接好，
  *      host 也能看到进度和结果。真机 bring-up 优先走这条路。 ---- */
+/* 必须 CLEAN 之后 host 才看得见：mailbox 在普通 DDR 上，CPU 的写会停在 L1D，
+ * 而 host 经 PCIe 后门读 DDR 完全绕过 cache。少了这一步，上面那句
+ * "真机 bring-up 优先走这条路"就不成立 —— host 读到的永远是旧值。 */
 static void mbox_set(unsigned long addr, uint32_t v) {
     *BOARD_PTR(uint32_t, addr) = v;
+    BOARD_DCACHE_CLEAN((void *)addr, sizeof(uint32_t));
+    BOARD_FENCE();
 }
 
 void qwen3_on_layer(int layer, int n_layers) {

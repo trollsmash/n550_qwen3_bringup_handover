@@ -58,7 +58,12 @@
  * 绕开 CPU 的 L1D 看 DDR 里的真值，独立判断 AME 到底写没写。 */
 #define MB_C_ADDR       MB(0x24)
 #define MB_HOST_MAGIC   MB(0x80)   /* [写] host 上电前写 0x5A5AC3C3 */
-#define MB_HOST_ECHO    MB(0x84)   /* [读] 程序读回的值，不符时看这里是什么 */
+#define MB_HOST_ECHO    MB(0x84)   /* [读] 程序同步后读回的值 */
+/* [读] **未经缓存同步**的裸读值。与 MB_HOST_ECHO 对照即可分清故障类型：
+ *   RAW 是垃圾、ECHO 正确  -> L1D 里有陈旧行，同步已把它解决
+ *   两者都是垃圾           -> 不是 cache 问题，查地址映射或 host 是否真写了
+ *   两者都正确             -> 通路完好 */
+#define MB_HOST_RAW     MB(0x88)
 
 #define HOST_MAGIC      0x5A5AC3C3u
 
@@ -71,10 +76,31 @@
 #define ST_ALLPASS      0xB00000AAu
 #define ST_FAIL(n)      (0xB00000F0u | (n))
 
+/* mailbox 是 CPU 与 host 共享的一块 DDR，host 侧经 PCIe 后门读写，
+ * **完全绕过 CPU 的 cache**。所以每一次交接都要显式同步：
+ *   写完 -> CLEAN，把值压到 DDR，host 才看得见
+ *   读前 -> FLUSH，写回并失效本地拷贝，才拿得到 host 写进去的值
+ *
+ * 少了写侧同步，host 读到的永远是旧值；少了读侧同步，程序读到的可能是
+ * 上电时 cache 里的随机内容。两种情况下 mailbox 这条"主观测通道"都是哑的，
+ * 而它恰恰是串口没调通时唯一的观测手段。
+ *
+ * 读侧用 FLUSH 而不是 INVAL：mailbox 各字段挨得很近，MB_HOST_MAGIC(0x80)
+ * 与 MB_HOST_ECHO(0x84) 就同处一条 64 字节 cache line，
+ * 用 INVAL 会把刚写进 ECHO 的脏数据直接丢掉。 */
 static void mb_set(unsigned long a, uint32_t v) {
     *BOARD_PTR(uint32_t, a) = v;
+    BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
+    BOARD_FENCE();
 }
 static uint32_t mb_get(unsigned long a) {
+    BOARD_DCACHE_FLUSH((void *)a, sizeof(uint32_t));
+    BOARD_FENCE();
+    return *BOARD_PTR(uint32_t, a);
+}
+/* 不做任何同步的裸读，只用于诊断：与 mb_get 的结果一对照，
+ * 就知道问题出在 cache 还是别处。 */
+static uint32_t mb_get_raw(unsigned long a) {
     return *BOARD_PTR(uint32_t, a);
 }
 
@@ -291,7 +317,11 @@ void qwen3_main(void) {
     mb_set(MB_STATUS, ST_UART);
 
     /* ---- 步骤 3：回读 host 预置的 magic，反证 PCIe 写 DDR 生效 ---- */
+    /* 先裸读、再同步读，两个值都留给 host —— 一次上板就能定位。
+     * 顺序不能反：同步读会改变 cache 状态，之后再裸读就看不出原貌了。 */
+    uint32_t raw = mb_get_raw(MB_HOST_MAGIC);
     uint32_t got = mb_get(MB_HOST_MAGIC);
+    mb_set(MB_HOST_RAW, raw);
     mb_set(MB_HOST_ECHO, got);
     P("step3 pcie magic  ");
     if (got == HOST_MAGIC) {
@@ -301,6 +331,9 @@ void qwen3_main(void) {
         /* 不直接停机：后面几步与 PCIe 无关，继续跑能一次收集到更多信息。
          * host 侧看 MB_HOST_ECHO 就知道实际读到的是什么。 */
         P("MISMATCH  期望 "); X(HOST_MAGIC); P("  实际 "); X(got); P("\n");
+        P("      裸读 "); X(raw); P("   同步后 "); X(got); P("\n");
+        if (raw != got)
+            P("      => 两者不同：L1D 里确有陈旧行，读侧同步已生效\n");
         P("      => host 是否在放开复位前往 "); X(MB_HOST_MAGIC); P(" 写过 magic？\n");
         mark_fail(3);
     }
