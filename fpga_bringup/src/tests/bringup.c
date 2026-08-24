@@ -49,6 +49,14 @@
  * 单靠 MB_STATUS 不够：软失败（如 step3）之后程序继续跑，
  * 后面几步的状态写入会把失败痕迹覆盖掉。这个字段只置位、不清除。 */
 #define MB_FAILMASK     MB(0x1C)
+/* [读] 同步前直接读到的 AME 结果。与 MB_AME_RESULT 对照可一眼区分故障类型：
+ *   RAW=哨兵 且 RESULT=32.0f  -> 缓存一致性问题，同步已生效
+ *   RAW 与 RESULT 都是哨兵      -> msce32 没写进来，查 AME 或地址
+ *   RESULT 是别的值             -> AME 算错了 */
+#define MB_AME_RAW      MB(0x20)
+/* [读] 结果缓冲的物理地址。host 可经 PCIe 直读该地址，
+ * 绕开 CPU 的 L1D 看 DDR 里的真值，独立判断 AME 到底写没写。 */
+#define MB_C_ADDR       MB(0x24)
 #define MB_HOST_MAGIC   MB(0x80)   /* [写] host 上电前写 0x5A5AC3C3 */
 #define MB_HOST_ECHO    MB(0x84)   /* [读] 程序读回的值，不符时看这里是什么 */
 
@@ -141,9 +149,21 @@ static void set_tile(unsigned long m, unsigned long n, unsigned long k) {
     __asm__ volatile("csrw 0x805, %0" :: "r"(k));
 }
 
+static uint32_t g_ame_raw;      /* 同步前读到的值，仅用于故障定位 */
+
 static uint32_t ame_selftest(void) {
-    for (int i = 0; i < 32; i++) { g_a[i] = 0x3F80; g_b[i] = 0x3F80; }  /* 1.0f */
-    g_c[0] = -1.0f;
+    for (int i = 0; i < 32; i++) { g_a[i] = 0x3F80; g_b[i] = 0x3F80; }
+    g_c[0] = -1.0f;             /* 哨兵：msce32 若没写，读回来就是它 */
+
+    /* ---- 进入 AME 前的缓存同步 ----
+     * AME 的访存绕过 L1D 直连 DDR，而上面几行是 CPU 写的、还留在 L1D 里。
+     * 不写回，AME 从 DDR 读到的就是旧内容；
+     * g_c 的脏行也必须先清掉，否则它稍后被写回时会覆盖 AME 的结果。 */
+    BOARD_DCACHE_CLEAN(g_a, 32 * sizeof g_a[0]);
+    BOARD_DCACHE_CLEAN(g_b, 32 * sizeof g_b[0]);
+    BOARD_DCACHE_FLUSH(g_c, sizeof g_c[0]);
+    BOARD_FENCE();
+
     set_tile(1, 1, 32);
     __asm__ volatile("mzero acc0");
     { register const void *p __asm__("a0") = g_a; register long s __asm__("a1") = 64;
@@ -154,6 +174,14 @@ static uint32_t ame_selftest(void) {
     { register void *p __asm__("a0") = g_c; register long s __asm__("a1") = 4;
       __asm__ volatile("msce32 acc0,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
     __asm__ volatile("mrelease");
+
+    /* ---- 退出 AME 后的缓存同步 ----
+     * fence 让 AME 的写落到 DDR，再失效 L1D 里可能残留的旧拷贝。 */
+    BOARD_FENCE();
+    { union { float f; uint32_t u; } r; r.f = g_c[0]; g_ame_raw = r.u; }
+    BOARD_DCACHE_INVAL(g_c, sizeof g_c[0]);
+    BOARD_FENCE();
+
     union { float f; uint32_t u; } v; v.f = g_c[0];
     return v.u;
 }
@@ -185,6 +213,12 @@ static uint64_t rd_mcycle(void) {
 
 static uint64_t perf_sample(void) {
     for (int i = 0; i < 128 * 32; i++) { g_pa[i] = 0x3F80; g_pb[i] = 0x3F80; }
+    /* 同样要写回 DDR：本函数虽只计时、不校验结果，但要让 AME 读到确定的数据，
+     * 计时才有可比性 —— 全零输入在某些实现上可能走捷径。
+     * 放在计时起点之前，不计入采样周期。 */
+    BOARD_DCACHE_CLEAN(g_pa, 128 * 32 * sizeof g_pa[0]);
+    BOARD_DCACHE_CLEAN(g_pb, 128 * 32 * sizeof g_pb[0]);
+    BOARD_FENCE();
     set_tile(PERF_TILE_M, PERF_TILE_N, 32);
     __asm__ volatile("mzero acc0");
 
@@ -265,8 +299,19 @@ void qwen3_main(void) {
 
     uint32_t r = ame_selftest();
     mb_set(MB_AME_RESULT, r);
+    mb_set(MB_AME_RAW, g_ame_raw);
+    mb_set(MB_C_ADDR, (uint32_t)(uintptr_t)g_c);
     P("step5 ame 1x1x32  "); X(r);
-    if (r != 0x42000000u) { P("  ★ 期望 0x42000000 (=32.0f)\n"); fail(5); }
+    if (r != 0x42000000u) {
+        P("  * 期望 0x42000000 (=32.0f)\n");
+        P("      同步前读到 ");
+        X(g_ame_raw);
+        P("\n      结果缓冲 @ ");
+        X((unsigned long)(uintptr_t)g_c);
+        P("\n      两者都是 0xbf800000 则说明 msce32 没写进来；\n");
+        P("      可让 host 经 PCIe 直读上面的地址，绕开 L1D 看 DDR 真值\n");
+        fail(5);
+    }
     P("  (=32.0f)   OK\n");
     mb_set(MB_STATUS, ST_AME);
 
