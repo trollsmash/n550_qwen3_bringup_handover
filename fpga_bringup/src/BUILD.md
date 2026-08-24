@@ -1,6 +1,6 @@
 # 源码与重新编译
 
-216K，包含 L0/L2/L3 全部源码。改完能自己编出镜像，
+228K，包含 L0/L2/L3 全部源码。改完能自己编出镜像，
 不必回头找软件侧。
 
 ## 目录
@@ -29,6 +29,16 @@ BOARD=s2c tools/build_riscv.sh bringup                # L0  -> bringup_s2c.bin
 KERNEL=ame OPS=rvv BOARD=s2c tools/build_riscv.sh baremetal   # L2/L3 -> qwen3_s2c.bin
 ```
 
+每次构建除了 `.bin` 还会产出三个文件，烧录只用 `.bin`，另外三个留着排障：
+
+| 文件 | 用途 |
+|---|---|
+| `.elf` | 带完整调试信息（`-g3 -gdwarf-4`），GDB / addr2line 用 |
+| `.diss` | 反汇编与 C 源码交织。串口打出 `*** TRAP ***` 时，拿 `mepc` 在这里搜地址，直接看到是哪条指令、哪一行 C |
+| `.sym` | 按地址排序的符号表，先看 `mepc` 落在哪个函数 |
+
+调试信息只存在于 `.elf`，`objcopy` 出来的 `.bin` 不受影响，**烧录镜像大小与不带调试信息时完全一致**。
+
 `tools/env.sh` 里两处按你们的环境改：`CROSS`（工具链前缀）和
 `RISCV_BUILD`（产物目录）。ISA 串**不要动**：
 
@@ -45,7 +55,8 @@ rv64gcv_zfh_zfbfmin_zvfh_zvfbfmin_zvfbfwma_xewmatrix1p0_zicbom_zicbop_zicboz_xdc
 | 想改什么 | 改哪里 |
 |---|---|
 | DDR / UART / 权重地址 | `src/bsp/board.h` 的 `BOARD_*`（S2C 段） |
-| 串口没输出，要配波特率 | 编译时加 `-DUART_NEEDS_INIT -DUART_DIVISOR=<值>`，见 `tests/bringup.c` |
+| 串口没输出 | 先确认寄存器位宽/间距：程序按 32 位、间距 4 字节访问，见 `board.h` 的 `BOARD_UART_32BIT` / `BOARD_UART_REG_SHIFT` |
+| 串口乱码 | 波特率按 UART 输入时钟 **40 MHz** 配（DLL=21 + DLF=11，误差 +0.06%）。若实际时钟不同，改 `board.h` 的 `BOARD_UART_CLK_HZ` 重编。这里 DLF 不能省：只用整数分频偏 +3.34%，已超 16550 容限 |
 | demo 生成几个 token | `src/main_baremetal.c` 的 `CHAT_MAX_GEN`（默认 1） |
 | demo 问什么问题 | `src/main_baremetal.c` 的 `DEMO_PROMPT` |
 

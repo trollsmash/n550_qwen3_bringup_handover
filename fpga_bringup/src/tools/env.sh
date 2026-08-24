@@ -47,7 +47,10 @@ export RISCV_ISA="rv64gcv_zfh_zfbfmin_zvfh_zvfbfmin_zvfbfwma_xewmatrix1p0_zicbom
 # 交叉编译公共选项。
 #   -mcmodel=medany  链接到 0x80000000 时必需，否则 relocation truncated to fit
 #   -std=gnu11       内联汇编、register asm、AME intrinsic 全是 GNU 扩展
-export RISCV_CFLAGS="-march=$RISCV_ISA -mabi=lp64d -mcmodel=medany -O2 -std=gnu11"
+# -g3 而非 -g：额外保留宏定义，板级参数（board.h 里全是宏）在 GDB 里可直接展开。
+# -gdwarf-4：addr2line / GDB 的兼容性最稳，避免个别工具链读不了 DWARF 5。
+# 调试信息只进 ELF，objcopy -O binary 不会带上，**烧录镜像大小不变**。
+export RISCV_CFLAGS="-march=$RISCV_ISA -mabi=lp64d -mcmodel=medany -O2 -std=gnu11 -g3 -gdwarf-4"
 
 # ---------------- QEMU (AME 定制版) ----------------
 # 只有 user-mode 支持 AME；qemu-system-riscv64 不支持矩阵扩展。

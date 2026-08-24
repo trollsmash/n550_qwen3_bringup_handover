@@ -39,17 +39,67 @@
 #define TOKENIZER_ADDR ((unsigned long)BOARD_TOKENIZER_ADDR)
 
 #define UART_BASE     ((unsigned long)BOARD_UART_BASE)
-#define UART_THR      0x00
-#define UART_LSR      0x05
+/* 寄存器**索引**，实际地址 = BASE + (索引 << BOARD_UART_REG_SHIFT) */
+#define UART_THR      0
+#define UART_DLL      0      /* 与 THR 同址，靠 LCR.DLAB 切换 */
+#define UART_IER      1
+#define UART_DLM      1      /* 与 IER 同址，靠 LCR.DLAB 切换 */
+#define UART_FCR      2
+#define UART_LCR      3
+#define UART_LSR      5
 #define UART_LSR_THRE 0x20
 
-/* ==================== UART ==================== */
+/* ==================== UART ====================
+ * 访问宽度与间距由 board.h 给出：本核的 16550 为 32 位寄存器，
+ * 用字节访问读 LSR 得到的是未定义结果。 */
+static inline unsigned long uart_addr(int idx) {
+    return UART_BASE + ((unsigned long)idx << BOARD_UART_REG_SHIFT);
+}
+/* 寄存器索引 -> 一次写。只有 uart_init 用得到，与 putc_ 分开是为了让
+ * putc_ 保持在最热路径上不做多余判断。 */
+static inline void uart_wr(int idx, uint32_t v) {
+#if BOARD_UART_32BIT
+    *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
+#else
+    *BOARD_PTR(uint8_t, uart_addr(idx)) = (uint8_t)v;
+#endif
+}
+
+/* 配波特率。本板不能指望 bootrom 已配好，程序必须自己来。
+ *
+ * 分频参数全部来自 board.h，由 BOARD_UART_CLK_HZ（UART 输入时钟，40 MHz）
+ * 算出。它与 BOARD_CPU_HZ 是两个独立配置项，本版板子上取值恰好相同。
+ * 拿错时钟的现象是满屏乱码，而不是没有输出。 */
+static void uart_init(void) {
+#if BOARD_UART_NEEDS_INIT
+    uart_wr(UART_IER, 0x00);                          /* 关中断 */
+    uart_wr(UART_LCR, 0x80);                          /* DLAB=1，露出分频寄存器 */
+    uart_wr(UART_DLL, BOARD_UART_DIVISOR & 0xFF);
+    uart_wr(UART_DLM, (BOARD_UART_DIVISOR >> 8) & 0xFF);
+    uart_wr(UART_LCR, 0x03);                          /* DLAB=0, 8N1 */
+#if BOARD_UART_HAS_DLF
+    /* DLF 小数分频，不受 DLAB 控制，故放在恢复 DLAB=0 之后写 */
+    uart_wr(BOARD_UART_DLF_IDX, BOARD_UART_DLF_VAL);
+#endif
+    uart_wr(UART_FCR, 0x07);                          /* 开 FIFO 并清空 */
+#endif
+}
+
 static void putc_(char c) {
     /* 有上限的轮询：真机上等 THRE 是对的，但若 LSR 读不到预期值也不能死等，
      * 否则整个程序静默挂死、毫无线索。 */
-    for (int i = 0; i < 100000; i++)
-        if (*(volatile uint8_t *)(UART_BASE + UART_LSR) & UART_LSR_THRE) break;
-    *(volatile uint8_t *)(UART_BASE + UART_THR) = (uint8_t)c;
+    for (int i = 0; i < 100000; i++) {
+#if BOARD_UART_32BIT
+        if (*BOARD_PTR(uint32_t, uart_addr(UART_LSR)) & UART_LSR_THRE) break;
+#else
+        if (*BOARD_PTR(uint8_t, uart_addr(UART_LSR)) & UART_LSR_THRE) break;
+#endif
+    }
+#if BOARD_UART_32BIT
+    *BOARD_PTR(uint32_t, uart_addr(UART_THR)) = (uint8_t)c;
+#else
+    *BOARD_PTR(uint8_t, uart_addr(UART_THR)) = (uint8_t)c;
+#endif
 }
 static void P(const char *s) { while (*s) { if (*s == '\n') putc_('\r'); putc_(*s++); } }
 static void U(unsigned long v) {
@@ -164,6 +214,7 @@ static void check_layout(void) {
 }
 
 void qwen3_main(void) {
+    uart_init();                /* 必须早于第一次 putc_ */
     P("\n=== Qwen3-0.6B on RISC-V (bare-metal) ===\n");
     P("kernel="); P(qwen3_kernel_name());
     P("  ops="); P(qwen3_ops_name()); P("\n");

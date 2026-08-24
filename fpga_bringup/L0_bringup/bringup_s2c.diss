@@ -1,0 +1,1278 @@
+
+/home/dlht/qwen3-build/bringup_s2c.elf:     file format elf64-littleriscv
+
+
+Disassembly of section .text:
+
+0000000080000000 <_start>:
+#include "board.h"
+    .section .text.init, "ax"
+    .global _start
+_start:
+    /* 只让 hart 0 继续，其余核原地睡眠 */
+    csrr    t0, mhartid
+    80000000:	f14022f3          	csrr	t0,mhartid
+    bnez    t0, park
+    80000004:	04029d63          	bnez	t0,8000005e <park>
+     * 真正会咬人的场景是 bring-up 时反复换镜像：
+     *   写镜像 A -> 跑 -> 写镜像 B 到同一地址 -> 软复位
+     * 若 I-cache 里还留着 A 的指令，CPU 会接着执行旧程序，
+     * 现象是"明明重新烧了，行为却没变"，越是反复调试越容易撞上。
+     * 一条 fence.i 就能排除这种可能，代价可以忽略。 */
+    fence.i
+    80000008:	0000100f          	fence.i
+     * 现象是 store/load access fault，且 epc 指向的指令看起来毫无问题 ——
+     * 极难联想到是 gp 的锅。
+     * .option norelax 是必需的：否则这条 la 自己会被 relax 成 gp 相对寻址（鸡生蛋）。 */
+    .option push
+    .option norelax
+    la      gp, __global_pointer$
+    8000000c:	00001197          	auipc	gp,0x1
+    80000010:	79418193          	addi	gp,gp,1940 # 800017a0 <__global_pointer$>
+    .option pop
+
+    /* 设栈指针（栈顶由 linker script 给出） */
+    la      sp, _stack_top
+    80000014:	00061117          	auipc	sp,0x61
+    80000018:	0ac10113          	addi	sp,sp,172 # 800610c0 <_end>
+
+    /* 清 BSS：静态 arena 依赖 BSS 被清零 */
+    la      t0, _bss_start
+    8000001c:	00001297          	auipc	t0,0x1
+    80000020:	fa428293          	addi	t0,t0,-92 # 80000fc0 <g_failmask>
+    la      t1, _bss_end
+    80000024:	00021317          	auipc	t1,0x21
+    80000028:	09c30313          	addi	t1,t1,156 # 800210c0 <_bss_end>
+1:  bgeu    t0, t1, 2f
+    8000002c:	0062f663          	bgeu	t0,t1,80000038 <_start+0x38>
+    sd      zero, 0(t0)
+    80000030:	0002b023          	sd	zero,0(t0)
+    addi    t0, t0, 8
+    80000034:	02a1                	addi	t0,t0,8
+    j       1b
+    80000036:	bfdd                	j	8000002c <_start+0x2c>
+     *   mstatus.FS [14:13] 浮点   —— 不开则任何浮点指令陷入
+     *   mstatus.VS [10:9]  向量   —— 不开则 RVV 指令陷入
+     *   mstatus.MS [30:29] 矩阵   —— 不开则所有 AME 指令报 illegal instruction
+     * MS 这一位极易遗漏：QEMU 里由 require_matrix() 检查，
+     * 漏了的现象与「指令编码不被支持」完全一样，非常容易误判。 */
+    li      t0, (1 << 13)         /* FS = Initial */
+    80000038:	6289                	lui	t0,0x2
+    csrs    mstatus, t0
+    8000003a:	3002a073          	csrs	mstatus,t0
+    li      t0, (1 << 9)          /* VS = Initial */
+    8000003e:	20000293          	li	t0,512
+    csrs    mstatus, t0
+    80000042:	3002a073          	csrs	mstatus,t0
+    li      t0, (1 << 29)         /* MS = Initial */
+    80000046:	200002b7          	lui	t0,0x20000
+    csrs    mstatus, t0
+    8000004a:	3002a073          	csrs	mstatus,t0
+
+    /* 安装 trap handler。
+     * 不装的话 mtvec 是 0，任何异常都跳到地址 0 去执行垃圾 ——
+     * 现象是程序"卡住"且 CPU 占满，与"正在慢慢算"完全无法区分。
+     * 真机上没有别的观测手段，只会更难查。 */
+    la      t0, trap_entry
+    8000004e:	00000297          	auipc	t0,0x0
+    80000052:	02228293          	addi	t0,t0,34 # 80000070 <trap_entry>
+    csrw    mtvec, t0             /* Direct 模式：低两位为 0 */
+    80000056:	30529073          	csrw	mtvec,t0
+
+    call    qwen3_main
+    8000005a:	286000ef          	jal	800002e0 <qwen3_main>
+
+000000008000005e <park>:
+
+park:
+    wfi
+    8000005e:	10500073          	wfi
+    j       park
+    80000062:	bff5                	j	8000005e <park>
+    80000064:	00000013          	nop
+    80000068:	00000013          	nop
+    8000006c:	00000013          	nop
+
+0000000080000070 <trap_entry>:
+ * FPGA 上换板子只需改下面的 UART 基址。
+ */
+    .align 4
+    .global trap_entry
+trap_entry:
+    li      t6, BOARD_UART_BASE   /* 来自 board.h，勿在此硬编码 */
+    80000070:	20100fb7          	lui	t6,0x20100
+
+    /* 先给 host 留个记号：PCIe 能回读 DDR，即使串口没接好也能看出是 trap。
+     * 用 t5 而不是 t0，t0 后面要装 mcause。 */
+    li      t5, BOARD_MBOX_STATUS
+    80000074:	6f05                	lui	t5,0x1
+    80000076:	87ff0f1b          	addiw	t5,t5,-1921 # 87f <__jvt_base$+0x87f>
+    8000007a:	0f52                	slli	t5,t5,0x14
+    li      t0, BOARD_ST_TRAP
+    8000007c:	00b0029b          	addiw	t0,zero,11
+    80000080:	02f2                	slli	t0,t0,0x1c
+    80000082:	0ff28293          	addi	t0,t0,255
+    sw      t0, 0(t5)
+    80000086:	005f2023          	sw	t0,0(t5)
+
+    la      t4, msg_trap
+    8000008a:	00001e97          	auipc	t4,0x1
+    8000008e:	956e8e93          	addi	t4,t4,-1706 # 800009e0 <msg_trap>
+    jal     t3, put_str
+    80000092:	04600e6f          	jal	t3,800000d8 <put_str>
+    csrr    t0, mcause
+    80000096:	342022f3          	csrr	t0,mcause
+    jal     t3, put_hex
+    8000009a:	05000e6f          	jal	t3,800000ea <put_hex>
+
+    la      t4, msg_epc
+    8000009e:	00001e97          	auipc	t4,0x1
+    800000a2:	962e8e93          	addi	t4,t4,-1694 # 80000a00 <msg_epc>
+    jal     t3, put_str
+    800000a6:	03200e6f          	jal	t3,800000d8 <put_str>
+    csrr    t0, mepc
+    800000aa:	341022f3          	csrr	t0,mepc
+    jal     t3, put_hex
+    800000ae:	03c00e6f          	jal	t3,800000ea <put_hex>
+
+    la      t4, msg_tval
+    800000b2:	00001e97          	auipc	t4,0x1
+    800000b6:	95ee8e93          	addi	t4,t4,-1698 # 80000a10 <msg_tval>
+    jal     t3, put_str
+    800000ba:	01e00e6f          	jal	t3,800000d8 <put_str>
+    csrr    t0, mtval
+    800000be:	343022f3          	csrr	t0,mtval
+    jal     t3, put_hex
+    800000c2:	02800e6f          	jal	t3,800000ea <put_hex>
+
+    la      t4, msg_hint
+    800000c6:	00001e97          	auipc	t4,0x1
+    800000ca:	95ae8e93          	addi	t4,t4,-1702 # 80000a20 <msg_hint>
+    jal     t3, put_str
+    800000ce:	00a00e6f          	jal	t3,800000d8 <put_str>
+
+1:  wfi
+    800000d2:	10500073          	wfi
+    j       1b
+    800000d6:	bff5                	j	800000d2 <trap_entry+0x62>
+
+00000000800000d8 <put_str>:
+
+/* 打印以 NUL 结尾的字符串，地址在 t4，返回地址在 t3 */
+put_str:
+1:  lbu     t1, 0(t4)          /* 读字符串，来自内存，始终按字节 */
+    800000d8:	000ec303          	lbu	t1,0(t4)
+    beqz    t1, 2f
+    800000dc:	00030663          	beqz	t1,800000e8 <put_str+0x10>
+    /* 写 UART THR。THR 的寄存器索引为 0，字节偏移恒为 0，
+     * 不受 REG_SHIFT 影响；这里只需匹配访问宽度。 */
+#if BOARD_UART_32BIT
+    sw      t1, 0(t6)
+    800000e0:	006fa023          	sw	t1,0(t6) # 20100000 <_stack_size+0x200c0000>
+#else
+    sb      t1, 0(t6)
+#endif
+    addi    t4, t4, 1
+    800000e4:	0e85                	addi	t4,t4,1
+    j       1b
+    800000e6:	bfcd                	j	800000d8 <put_str>
+2:  jr      t3
+    800000e8:	8e02                	jr	t3
+
+00000000800000ea <put_hex>:
+
+/* 打印 t0 的 16 位十六进制，返回地址在 t3 */
+put_hex:
+    li      t1, 60
+    800000ea:	03c00313          	li	t1,60
+1:  srl     t2, t0, t1
+    800000ee:	0062d3b3          	srl	t2,t0,t1
+    andi    t2, t2, 0xf
+    800000f2:	00f3f393          	andi	t2,t2,15
+    li      t5, 10
+    800000f6:	4f29                	li	t5,10
+    blt     t2, t5, 2f
+    800000f8:	01e3c563          	blt	t2,t5,80000102 <put_hex+0x18>
+    addi    t2, t2, 'a' - 10
+    800000fc:	05738393          	addi	t2,t2,87
+    j       3f
+    80000100:	a019                	j	80000106 <put_hex+0x1c>
+2:  addi    t2, t2, '0'
+    80000102:	03038393          	addi	t2,t2,48
+3:
+#if BOARD_UART_32BIT
+    sw      t2, 0(t6)
+    80000106:	007fa023          	sw	t2,0(t6)
+#else
+    sb      t2, 0(t6)
+#endif
+    addi    t1, t1, -4
+    8000010a:	1371                	addi	t1,t1,-4
+    bgez    t1, 1b
+    8000010c:	fe0351e3          	bgez	t1,800000ee <put_hex+0x4>
+    jr      t3
+    80000110:	8e02                	jr	t3
+	...
+
+000000008000011a <P>:
+     * 宁可字符发飞，也要让程序继续往下走，把 mailbox 填完。 */
+    for (int i = 0; i < 100000; i++)
+        if (uart_rd(UART_LSR) & LSR_THRE) break;
+    uart_wr(UART_THR, (uint8_t)c);
+}
+static void P(const char *s) { while (*s) { if (*s == '\n') putc_('\r'); putc_(*s++); } }
+    8000011a:	00054783          	lbu	a5,0(a0)
+    8000011e:	cf8d                	beqz	a5,80000158 <P+0x3e>
+    return *BOARD_PTR(uint32_t, uart_addr(idx));
+    80000120:	201006b7          	lui	a3,0x20100
+    80000124:	06d1                	addi	a3,a3,20 # 20100014 <_stack_size+0x200c0014>
+static void P(const char *s) { while (*s) { if (*s == '\n') putc_('\r'); putc_(*s++); } }
+    80000126:	4829                	li	a6,10
+    *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
+    80000128:	201005b7          	lui	a1,0x20100
+    8000012c:	48b5                	li	a7,13
+static void P(const char *s) { while (*s) { if (*s == '\n') putc_('\r'); putc_(*s++); } }
+    8000012e:	03078663          	beq	a5,a6,8000015a <P+0x40>
+    80000132:	6761                	lui	a4,0x18
+    80000134:	0505                	addi	a0,a0,1
+    80000136:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
+    8000013a:	fff54603          	lbu	a2,-1(a0)
+    for (int i = 0; i < 100000; i++)
+    8000013e:	a011                	j	80000142 <P+0x28>
+    80000140:	c711                	beqz	a4,8000014c <P+0x32>
+    return *BOARD_PTR(uint32_t, uart_addr(idx));
+    80000142:	429c                	lw	a5,0(a3)
+    for (int i = 0; i < 100000; i++)
+    80000144:	377d                	addiw	a4,a4,-1
+        if (uart_rd(UART_LSR) & LSR_THRE) break;
+    80000146:	0207f793          	andi	a5,a5,32
+    8000014a:	dbfd                	beqz	a5,80000140 <P+0x26>
+    uart_wr(UART_THR, (uint8_t)c);
+    8000014c:	0006079b          	sext.w	a5,a2
+    *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
+    80000150:	c19c                	sw	a5,0(a1)
+static void P(const char *s) { while (*s) { if (*s == '\n') putc_('\r'); putc_(*s++); } }
+    80000152:	00054783          	lbu	a5,0(a0)
+    80000156:	ffe1                	bnez	a5,8000012e <P+0x14>
+    80000158:	8082                	ret
+    8000015a:	6761                	lui	a4,0x18
+    8000015c:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
+    80000160:	a011                	j	80000164 <P+0x4a>
+    for (int i = 0; i < 100000; i++)
+    80000162:	c711                	beqz	a4,8000016e <P+0x54>
+    return *BOARD_PTR(uint32_t, uart_addr(idx));
+    80000164:	429c                	lw	a5,0(a3)
+    for (int i = 0; i < 100000; i++)
+    80000166:	377d                	addiw	a4,a4,-1
+        if (uart_rd(UART_LSR) & LSR_THRE) break;
+    80000168:	0207f793          	andi	a5,a5,32
+    8000016c:	dbfd                	beqz	a5,80000162 <P+0x48>
+    *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
+    8000016e:	0115a023          	sw	a7,0(a1) # 20100000 <_stack_size+0x200c0000>
+}
+    80000172:	b7c1                	j	80000132 <P+0x18>
+
+0000000080000174 <X>:
+    char b[24]; int i = 0;
+    if (!v) { putc_('0'); return; }
+    while (v) { b[i++] = (char)('0' + v % 10); v /= 10; }
+    while (i) putc_(b[--i]);
+}
+static void X(unsigned long v) {
+    80000174:	1141                	addi	sp,sp,-16
+    80000176:	e022                	sd	s0,0(sp)
+    80000178:	842a                	mv	s0,a0
+    P("0x");
+    8000017a:	00001517          	auipc	a0,0x1
+    8000017e:	a0650513          	addi	a0,a0,-1530 # 80000b80 <msg_hint+0x160>
+static void X(unsigned long v) {
+    80000182:	e406                	sd	ra,8(sp)
+    P("0x");
+    80000184:	f97ff0ef          	jal	8000011a <P>
+    return *BOARD_PTR(uint32_t, uart_addr(idx));
+    80000188:	201006b7          	lui	a3,0x20100
+    8000018c:	06d1                	addi	a3,a3,20 # 20100014 <_stack_size+0x200c0014>
+    for (int s = 28; s >= 0; s -= 4) putc_("0123456789abcdef"[(v >> s) & 0xf]);
+    8000018e:	4671                	li	a2,28
+    80000190:	00001897          	auipc	a7,0x1
+    80000194:	9f888893          	addi	a7,a7,-1544 # 80000b88 <msg_hint+0x168>
+    *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
+    80000198:	20100837          	lui	a6,0x20100
+    for (int s = 28; s >= 0; s -= 4) putc_("0123456789abcdef"[(v >> s) & 0xf]);
+    8000019c:	5571                	li	a0,-4
+    8000019e:	00c457b3          	srl	a5,s0,a2
+    800001a2:	8bbd                	andi	a5,a5,15
+    800001a4:	97c6                	add	a5,a5,a7
+    800001a6:	6761                	lui	a4,0x18
+    800001a8:	0007c583          	lbu	a1,0(a5)
+    800001ac:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
+    800001b0:	a011                	j	800001b4 <X+0x40>
+    for (int i = 0; i < 100000; i++)
+    800001b2:	c711                	beqz	a4,800001be <X+0x4a>
+    return *BOARD_PTR(uint32_t, uart_addr(idx));
+    800001b4:	429c                	lw	a5,0(a3)
+    for (int i = 0; i < 100000; i++)
+    800001b6:	377d                	addiw	a4,a4,-1
+        if (uart_rd(UART_LSR) & LSR_THRE) break;
+    800001b8:	0207f793          	andi	a5,a5,32
+    800001bc:	dbfd                	beqz	a5,800001b2 <X+0x3e>
+    uart_wr(UART_THR, (uint8_t)c);
+    800001be:	0005879b          	sext.w	a5,a1
+    *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
+    800001c2:	00f82023          	sw	a5,0(a6) # 20100000 <_stack_size+0x200c0000>
+    for (int s = 28; s >= 0; s -= 4) putc_("0123456789abcdef"[(v >> s) & 0xf]);
+    800001c6:	3671                	addiw	a2,a2,-4
+    800001c8:	fca61be3          	bne	a2,a0,8000019e <X+0x2a>
+}
+    800001cc:	60a2                	ld	ra,8(sp)
+    800001ce:	6402                	ld	s0,0(sp)
+    800001d0:	0141                	addi	sp,sp,16
+    800001d2:	8082                	ret
+
+00000000800001d4 <U>:
+    if (!v) { putc_('0'); return; }
+    800001d4:	c541                	beqz	a0,8000025c <U+0x88>
+    while (v) { b[i++] = (char)('0' + v % 10); v /= 10; }
+    800001d6:	ccccd7b7          	lui	a5,0xccccd
+    800001da:	ccd78793          	addi	a5,a5,-819 # ffffffffcccccccd <_end+0xffffffff4cc6bc0d>
+static void U(unsigned long v) {
+    800001de:	1101                	addi	sp,sp,-32
+    800001e0:	0030                	addi	a2,sp,8
+    while (v) { b[i++] = (char)('0' + v % 10); v /= 10; }
+    800001e2:	02079893          	slli	a7,a5,0x20
+    800001e6:	86b2                	mv	a3,a2
+    800001e8:	98be                	add	a7,a7,a5
+    800001ea:	4325                	li	t1,9
+    800001ec:	031537b3          	mulhu	a5,a0,a7
+    800001f0:	85aa                	mv	a1,a0
+    800001f2:	8836                	mv	a6,a3
+    800001f4:	0685                	addi	a3,a3,1
+    800001f6:	838d                	srli	a5,a5,0x3
+    800001f8:	00279713          	slli	a4,a5,0x2
+    800001fc:	973e                	add	a4,a4,a5
+    800001fe:	0706                	slli	a4,a4,0x1
+    80000200:	8d19                	sub	a0,a0,a4
+    80000202:	0305051b          	addiw	a0,a0,48
+    80000206:	fea68fa3          	sb	a0,-1(a3)
+    8000020a:	853e                	mv	a0,a5
+    8000020c:	feb360e3          	bltu	t1,a1,800001ec <U+0x18>
+    80000210:	40c807bb          	subw	a5,a6,a2
+    80000214:	2785                	addiw	a5,a5,1
+    while (i) putc_(b[--i]);
+    80000216:	fff7871b          	addiw	a4,a5,-1
+    8000021a:	fff60513          	addi	a0,a2,-1
+    8000021e:	1702                	slli	a4,a4,0x20
+    80000220:	9301                	srli	a4,a4,0x20
+    80000222:	953e                	add	a0,a0,a5
+    return *BOARD_PTR(uint32_t, uart_addr(idx));
+    80000224:	201006b7          	lui	a3,0x20100
+    80000228:	8d19                	sub	a0,a0,a4
+    8000022a:	963e                	add	a2,a2,a5
+    8000022c:	06d1                	addi	a3,a3,20 # 20100014 <_stack_size+0x200c0014>
+    *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
+    8000022e:	20100837          	lui	a6,0x20100
+    while (i) putc_(b[--i]);
+    80000232:	6761                	lui	a4,0x18
+    80000234:	fff64583          	lbu	a1,-1(a2)
+    80000238:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
+    8000023c:	a011                	j	80000240 <U+0x6c>
+    for (int i = 0; i < 100000; i++)
+    8000023e:	c711                	beqz	a4,8000024a <U+0x76>
+    return *BOARD_PTR(uint32_t, uart_addr(idx));
+    80000240:	429c                	lw	a5,0(a3)
+    for (int i = 0; i < 100000; i++)
+    80000242:	377d                	addiw	a4,a4,-1
+        if (uart_rd(UART_LSR) & LSR_THRE) break;
+    80000244:	0207f793          	andi	a5,a5,32
+    80000248:	dbfd                	beqz	a5,8000023e <U+0x6a>
+    uart_wr(UART_THR, (uint8_t)c);
+    8000024a:	0005879b          	sext.w	a5,a1
+    *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
+    8000024e:	00f82023          	sw	a5,0(a6) # 20100000 <_stack_size+0x200c0000>
+    while (i) putc_(b[--i]);
+    80000252:	167d                	addi	a2,a2,-1
+    80000254:	fcc51fe3          	bne	a0,a2,80000232 <U+0x5e>
+}
+    80000258:	6105                	addi	sp,sp,32
+    8000025a:	8082                	ret
+    8000025c:	6761                	lui	a4,0x18
+    return *BOARD_PTR(uint32_t, uart_addr(idx));
+    8000025e:	201006b7          	lui	a3,0x20100
+    80000262:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
+    80000266:	06d1                	addi	a3,a3,20 # 20100014 <_stack_size+0x200c0014>
+    80000268:	a011                	j	8000026c <U+0x98>
+    for (int i = 0; i < 100000; i++)
+    8000026a:	c711                	beqz	a4,80000276 <U+0xa2>
+    return *BOARD_PTR(uint32_t, uart_addr(idx));
+    8000026c:	429c                	lw	a5,0(a3)
+    for (int i = 0; i < 100000; i++)
+    8000026e:	377d                	addiw	a4,a4,-1
+        if (uart_rd(UART_LSR) & LSR_THRE) break;
+    80000270:	0207f793          	andi	a5,a5,32
+    80000274:	dbfd                	beqz	a5,8000026a <U+0x96>
+    *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
+    80000276:	201007b7          	lui	a5,0x20100
+    8000027a:	03000713          	li	a4,48
+    8000027e:	c398                	sw	a4,0(a5)
+    if (!v) { putc_('0'); return; }
+    80000280:	8082                	ret
+
+0000000080000282 <fail>:
+/* 失败步骤的位掩码。软失败（继续跑）与硬失败（当场停机）都记在这里，
+ * 最后统一裁决 —— 否则后续阶段的状态写入会盖掉先前的失败痕迹。 */
+static uint32_t g_failmask;
+
+static void mark_fail(int step) {
+    g_failmask |= (1u << step);
+    80000282:	00001717          	auipc	a4,0x1
+    80000286:	d3e72703          	lw	a4,-706(a4) # 80000fc0 <g_failmask>
+    8000028a:	4785                	li	a5,1
+    8000028c:	00a797bb          	sllw	a5,a5,a0
+    80000290:	8fd9                	or	a5,a5,a4
+    mb_set(MB_FAILMASK, g_failmask);
+    mb_set(MB_STATUS, ST_FAIL(step));
+}
+
+/* 硬失败：这一步不过，后面的测试没有意义，当场停机。 */
+static void fail(int step) {
+    80000292:	1141                	addi	sp,sp,-16
+    *BOARD_PTR(uint32_t, a) = v;
+    80000294:	0087f6b7          	lui	a3,0x87f
+    g_failmask |= (1u << step);
+    80000298:	00001617          	auipc	a2,0x1
+    8000029c:	d2f62423          	sw	a5,-728(a2) # 80000fc0 <g_failmask>
+    mb_set(MB_STATUS, ST_FAIL(step));
+    800002a0:	b0000737          	lui	a4,0xb0000
+static void fail(int step) {
+    800002a4:	e406                	sd	ra,8(sp)
+    800002a6:	e022                	sd	s0,0(sp)
+    *BOARD_PTR(uint32_t, a) = v;
+    800002a8:	06a2                	slli	a3,a3,0x8
+    800002aa:	0087f637          	lui	a2,0x87f
+    mb_set(MB_STATUS, ST_FAIL(step));
+    800002ae:	0f070713          	addi	a4,a4,240 # ffffffffb00000f0 <_end+0xffffffff2ff9f030>
+    *BOARD_PTR(uint32_t, a) = v;
+    800002b2:	cedc                	sw	a5,28(a3)
+    mb_set(MB_STATUS, ST_FAIL(step));
+    800002b4:	00e567b3          	or	a5,a0,a4
+    *BOARD_PTR(uint32_t, a) = v;
+    800002b8:	00861713          	slli	a4,a2,0x8
+static void fail(int step) {
+    800002bc:	842a                	mv	s0,a0
+    *BOARD_PTR(uint32_t, a) = v;
+    800002be:	c31c                	sw	a5,0(a4)
+    mark_fail(step);
+    P("\n*** FAIL at step "); U((unsigned long)step); P(" ***\n");
+    800002c0:	00001517          	auipc	a0,0x1
+    800002c4:	8e050513          	addi	a0,a0,-1824 # 80000ba0 <msg_hint+0x180>
+    800002c8:	e53ff0ef          	jal	8000011a <P>
+    800002cc:	8522                	mv	a0,s0
+    800002ce:	f07ff0ef          	jal	800001d4 <U>
+    800002d2:	00001517          	auipc	a0,0x1
+    800002d6:	8e650513          	addi	a0,a0,-1818 # 80000bb8 <msg_hint+0x198>
+    800002da:	e41ff0ef          	jal	8000011a <P>
+    for (;;) { }
+    800002de:	a001                	j	800002de <fail+0x5c>
+
+00000000800002e0 <qwen3_main>:
+}
+
+void qwen3_main(void) {
+    800002e0:	7179                	addi	sp,sp,-48
+    800002e2:	f022                	sd	s0,32(sp)
+    *BOARD_PTR(uint32_t, a) = v;
+    800002e4:	b00007b7          	lui	a5,0xb0000
+    800002e8:	0087f437          	lui	s0,0x87f
+void qwen3_main(void) {
+    800002ec:	f406                	sd	ra,40(sp)
+    800002ee:	ec26                	sd	s1,24(sp)
+    800002f0:	e84a                	sd	s2,16(sp)
+    800002f2:	e44e                	sd	s3,8(sp)
+    *BOARD_PTR(uint32_t, a) = v;
+    800002f4:	0422                	slli	s0,s0,0x8
+    800002f6:	07c1                	addi	a5,a5,16 # ffffffffb0000010 <_end+0xffffffff2ff9ef50>
+    800002f8:	c01c                	sw	a5,0(s0)
+    *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
+    800002fa:	20100737          	lui	a4,0x20100
+    800002fe:	00072223          	sw	zero,4(a4) # 20100004 <_stack_size+0x200c0004>
+    80000302:	08000693          	li	a3,128
+    80000306:	c754                	sw	a3,12(a4)
+    80000308:	46d5                	li	a3,21
+    8000030a:	c314                	sw	a3,0(a4)
+    8000030c:	00072223          	sw	zero,4(a4)
+    80000310:	468d                	li	a3,3
+    80000312:	c754                	sw	a3,12(a4)
+    80000314:	46ad                	li	a3,11
+    80000316:	87ba                	mv	a5,a4
+    80000318:	0cd72023          	sw	a3,192(a4)
+    8000031c:	471d                	li	a4,7
+    8000031e:	c798                	sw	a4,8(a5)
+    /* ---- 步骤 1：能执行到这里，说明复位放开、取指正常、DDR 可写 ---- */
+    mb_set(MB_STATUS, ST_BOOT);
+
+    /* ---- 步骤 2：串口 ---- */
+    uart_init();
+    P("\n\n=== S2C BRINGUP (" BOARD_NAME ") ===\n");
+    80000320:	00001517          	auipc	a0,0x1
+    80000324:	8a050513          	addi	a0,a0,-1888 # 80000bc0 <msg_hint+0x1a0>
+    80000328:	df3ff0ef          	jal	8000011a <P>
+    P("step1 boot        OK   (mailbox @ "); X(BOARD_MBOX_ADDR); P(")\n");
+    8000032c:	00001517          	auipc	a0,0x1
+    80000330:	8bc50513          	addi	a0,a0,-1860 # 80000be8 <msg_hint+0x1c8>
+    80000334:	de7ff0ef          	jal	8000011a <P>
+    80000338:	8522                	mv	a0,s0
+    8000033a:	e3bff0ef          	jal	80000174 <X>
+    8000033e:	00001517          	auipc	a0,0x1
+    80000342:	8d250513          	addi	a0,a0,-1838 # 80000c10 <msg_hint+0x1f0>
+    80000346:	dd5ff0ef          	jal	8000011a <P>
+    P("step2 uart        OK   (base "); X(BOARD_UART_BASE); P(")\n");
+    8000034a:	00001517          	auipc	a0,0x1
+    8000034e:	8ce50513          	addi	a0,a0,-1842 # 80000c18 <msg_hint+0x1f8>
+    80000352:	dc9ff0ef          	jal	8000011a <P>
+    80000356:	20100537          	lui	a0,0x20100
+    8000035a:	e1bff0ef          	jal	80000174 <X>
+    8000035e:	00001517          	auipc	a0,0x1
+    80000362:	8b250513          	addi	a0,a0,-1870 # 80000c10 <msg_hint+0x1f0>
+    80000366:	db5ff0ef          	jal	8000011a <P>
+    *BOARD_PTR(uint32_t, a) = v;
+    8000036a:	b00007b7          	lui	a5,0xb0000
+    8000036e:	02078793          	addi	a5,a5,32 # ffffffffb0000020 <_end+0xffffffff2ff9ef60>
+    80000372:	c01c                	sw	a5,0(s0)
+    return *BOARD_PTR(uint32_t, a);
+    80000374:	08042903          	lw	s2,128(s0) # 87f080 <_stack_size+0x83f080>
+
+    /* ---- 步骤 3：回读 host 预置的 magic，反证 PCIe 写 DDR 生效 ---- */
+    uint32_t got = mb_get(MB_HOST_MAGIC);
+    mb_set(MB_HOST_ECHO, got);
+    P("step3 pcie magic  ");
+    if (got == HOST_MAGIC) {
+    80000378:	5a5ac9b7          	lui	s3,0x5a5ac
+    P("step3 pcie magic  ");
+    8000037c:	00001517          	auipc	a0,0x1
+    80000380:	8bc50513          	addi	a0,a0,-1860 # 80000c38 <msg_hint+0x218>
+    return *BOARD_PTR(uint32_t, a);
+    80000384:	2901                	sext.w	s2,s2
+    *BOARD_PTR(uint32_t, a) = v;
+    80000386:	09242223          	sw	s2,132(s0)
+    if (got == HOST_MAGIC) {
+    8000038a:	3c398993          	addi	s3,s3,963 # 5a5ac3c3 <_stack_size+0x5a56c3c3>
+    return *BOARD_PTR(uint32_t, a);
+    8000038e:	08040493          	addi	s1,s0,128
+    P("step3 pcie magic  ");
+    80000392:	d89ff0ef          	jal	8000011a <P>
+    if (got == HOST_MAGIC) {
+    80000396:	0f390063          	beq	s2,s3,80000476 <qwen3_main+0x196>
+        P("OK   ("); X(got); P(")\n");
+        mb_set(MB_STATUS, ST_PCIE);
+    } else {
+        /* 不直接停机：后面几步与 PCIe 无关，继续跑能一次收集到更多信息。
+         * host 侧看 MB_HOST_ECHO 就知道实际读到的是什么。 */
+        P("MISMATCH  期望 "); X(HOST_MAGIC); P("  实际 "); X(got); P("\n");
+    8000039a:	00001517          	auipc	a0,0x1
+    8000039e:	8be50513          	addi	a0,a0,-1858 # 80000c58 <msg_hint+0x238>
+    800003a2:	d79ff0ef          	jal	8000011a <P>
+    800003a6:	854e                	mv	a0,s3
+    800003a8:	dcdff0ef          	jal	80000174 <X>
+    800003ac:	00001517          	auipc	a0,0x1
+    800003b0:	8c450513          	addi	a0,a0,-1852 # 80000c70 <msg_hint+0x250>
+    800003b4:	d67ff0ef          	jal	8000011a <P>
+    800003b8:	02091513          	slli	a0,s2,0x20
+    800003bc:	9101                	srli	a0,a0,0x20
+    800003be:	db7ff0ef          	jal	80000174 <X>
+    800003c2:	00001517          	auipc	a0,0x1
+    800003c6:	8be50513          	addi	a0,a0,-1858 # 80000c80 <msg_hint+0x260>
+    800003ca:	d51ff0ef          	jal	8000011a <P>
+        P("      => host 是否在放开复位前往 "); X(MB_HOST_MAGIC); P(" 写过 magic？\n");
+    800003ce:	00001517          	auipc	a0,0x1
+    800003d2:	8ba50513          	addi	a0,a0,-1862 # 80000c88 <msg_hint+0x268>
+    800003d6:	d45ff0ef          	jal	8000011a <P>
+    800003da:	8526                	mv	a0,s1
+    800003dc:	d99ff0ef          	jal	80000174 <X>
+    800003e0:	00001517          	auipc	a0,0x1
+    800003e4:	8d850513          	addi	a0,a0,-1832 # 80000cb8 <msg_hint+0x298>
+    800003e8:	d33ff0ef          	jal	8000011a <P>
+    g_failmask |= (1u << step);
+    800003ec:	00001717          	auipc	a4,0x1
+    800003f0:	bd472703          	lw	a4,-1068(a4) # 80000fc0 <g_failmask>
+    *BOARD_PTR(uint32_t, a) = v;
+    800003f4:	0087f7b7          	lui	a5,0x87f
+    800003f8:	07a2                	slli	a5,a5,0x8
+    g_failmask |= (1u << step);
+    800003fa:	00876713          	ori	a4,a4,8
+    800003fe:	00001697          	auipc	a3,0x1
+    80000402:	bce6a123          	sw	a4,-1086(a3) # 80000fc0 <g_failmask>
+    *BOARD_PTR(uint32_t, a) = v;
+    80000406:	b00006b7          	lui	a3,0xb0000
+    8000040a:	cfd8                	sw	a4,28(a5)
+    8000040c:	0f368793          	addi	a5,a3,243 # ffffffffb00000f3 <_end+0xffffffff2ff9f033>
+    80000410:	c01c                	sw	a5,0(s0)
+        mark_fail(3);
+    }
+
+    /* ---- 步骤 4：RVV ---- */
+    unsigned long vlenb;
+    __asm__ volatile("csrr %0, vlenb" : "=r"(vlenb));
+    80000412:	c2202473          	csrr	s0,vlenb
+    *BOARD_PTR(uint32_t, a) = v;
+    80000416:	0087f7b7          	lui	a5,0x87f
+    mb_set(MB_VLENB, (uint32_t)vlenb);
+    8000041a:	0004071b          	sext.w	a4,s0
+    *BOARD_PTR(uint32_t, a) = v;
+    8000041e:	07a2                	slli	a5,a5,0x8
+    80000420:	c3d8                	sw	a4,4(a5)
+    P("step4 rvv vlenb   ");
+    80000422:	00001517          	auipc	a0,0x1
+    80000426:	8ae50513          	addi	a0,a0,-1874 # 80000cd0 <msg_hint+0x2b0>
+    *BOARD_PTR(uint32_t, a) = v;
+    8000042a:	0087f7b7          	lui	a5,0x87f
+    8000042e:	00879493          	slli	s1,a5,0x8
+    P("step4 rvv vlenb   ");
+    80000432:	ce9ff0ef          	jal	8000011a <P>
+    U(vlenb); P(" bytes (VLEN="); U(vlenb * 8); P(" bit)");
+    80000436:	8522                	mv	a0,s0
+    80000438:	d9dff0ef          	jal	800001d4 <U>
+    8000043c:	00001517          	auipc	a0,0x1
+    80000440:	8ac50513          	addi	a0,a0,-1876 # 80000ce8 <msg_hint+0x2c8>
+    80000444:	cd7ff0ef          	jal	8000011a <P>
+    80000448:	00341513          	slli	a0,s0,0x3
+    8000044c:	d89ff0ef          	jal	800001d4 <U>
+    80000450:	00001517          	auipc	a0,0x1
+    80000454:	8a850513          	addi	a0,a0,-1880 # 80000cf8 <msg_hint+0x2d8>
+    80000458:	cc3ff0ef          	jal	8000011a <P>
+    if (vlenb != 128) { P("  ★ 期望 128\n"); fail(4); }
+    8000045c:	08000793          	li	a5,128
+    80000460:	04f40063          	beq	s0,a5,800004a0 <qwen3_main+0x1c0>
+    80000464:	00001517          	auipc	a0,0x1
+    80000468:	89c50513          	addi	a0,a0,-1892 # 80000d00 <msg_hint+0x2e0>
+    8000046c:	cafff0ef          	jal	8000011a <P>
+    80000470:	4511                	li	a0,4
+    80000472:	e11ff0ef          	jal	80000282 <fail>
+        P("OK   ("); X(got); P(")\n");
+    80000476:	00000517          	auipc	a0,0x0
+    8000047a:	7da50513          	addi	a0,a0,2010 # 80000c50 <msg_hint+0x230>
+    8000047e:	c9dff0ef          	jal	8000011a <P>
+    80000482:	854a                	mv	a0,s2
+    80000484:	cf1ff0ef          	jal	80000174 <X>
+    80000488:	00000517          	auipc	a0,0x0
+    8000048c:	78850513          	addi	a0,a0,1928 # 80000c10 <msg_hint+0x1f0>
+    80000490:	c8bff0ef          	jal	8000011a <P>
+    *BOARD_PTR(uint32_t, a) = v;
+    80000494:	b00007b7          	lui	a5,0xb0000
+    80000498:	03078793          	addi	a5,a5,48 # ffffffffb0000030 <_end+0xffffffff2ff9ef70>
+    8000049c:	c01c                	sw	a5,0(s0)
+}
+    8000049e:	bf95                	j	80000412 <qwen3_main+0x132>
+    P("   OK\n");
+    800004a0:	00001517          	auipc	a0,0x1
+    800004a4:	87850513          	addi	a0,a0,-1928 # 80000d18 <msg_hint+0x2f8>
+    800004a8:	c73ff0ef          	jal	8000011a <P>
+    *BOARD_PTR(uint32_t, a) = v;
+    800004ac:	b00007b7          	lui	a5,0xb0000
+    800004b0:	04078793          	addi	a5,a5,64 # ffffffffb0000040 <_end+0xffffffff2ff9ef80>
+    800004b4:	c09c                	sw	a5,0(s1)
+    mb_set(MB_STATUS, ST_RVV);
+
+    /* ---- 步骤 5：AME 最小 GEMM ---- */
+    unsigned long cap;
+    __asm__ volatile("csrr %0, 0x803" : "=r"(cap));   /* 回读 mtilem，核对配置 */
+    800004b6:	80302773          	csrr	a4,mtilem
+    mb_set(MB_MTILE_CAP, (uint32_t)cap);
+    800004ba:	6691                	lui	a3,0x4
+    *BOARD_PTR(uint32_t, a) = v;
+    800004bc:	0087f7b7          	lui	a5,0x87f
+    800004c0:	f806869b          	addiw	a3,a3,-128 # 3f80 <__jvt_base$+0x3f80>
+    800004c4:	07a2                	slli	a5,a5,0x8
+    mb_set(MB_MTILE_CAP, (uint32_t)cap);
+    800004c6:	2701                	sext.w	a4,a4
+    *BOARD_PTR(uint32_t, a) = v;
+    800004c8:	cc847057          	vsetivli	zero,8,e16,m1,ta,ma
+    800004cc:	cf98                	sw	a4,24(a5)
+    for (int i = 0; i < 32; i++) { g_a[i] = 0x3F80; g_b[i] = 0x3F80; }
+    800004ce:	5e06c0d7          	vmv.v.x	v1,a3
+    800004d2:	0001f797          	auipc	a5,0x1f
+    800004d6:	bae78793          	addi	a5,a5,-1106 # 8001f080 <g_a>
+    800004da:	0001d717          	auipc	a4,0x1d
+    800004de:	b6670713          	addi	a4,a4,-1178 # 8001d040 <g_b>
+    800004e2:	0001f697          	auipc	a3,0x1f
+    800004e6:	bde68693          	addi	a3,a3,-1058 # 8001f0c0 <g_a+0x40>
+    800004ea:	0207d0a7          	vse16.v	v1,(a5)
+    800004ee:	020750a7          	vse16.v	v1,(a4)
+    800004f2:	07c1                	addi	a5,a5,16
+    800004f4:	0741                	addi	a4,a4,16
+    800004f6:	fed79ae3          	bne	a5,a3,800004ea <qwen3_main+0x20a>
+    g_c[0] = -1.0f;             /* 哨兵：msce32 若没写，读回来就是它 */
+    800004fa:	00001797          	auipc	a5,0x1
+    800004fe:	aa27a787          	flw	fa5,-1374(a5) # 80000f9c <msg_hint+0x57c>
+    80000502:	0001b417          	auipc	s0,0x1b
+    80000506:	afe40413          	addi	s0,s0,-1282 # 8001b000 <g_c>
+    8000050a:	00f42027          	fsw	fa5,0(s0)
+    BOARD_DCACHE_CLEAN(g_a, 32 * sizeof g_a[0]);
+    8000050e:	0010702b          	l1d_clean_all
+    BOARD_DCACHE_CLEAN(g_b, 32 * sizeof g_b[0]);
+    80000512:	0010702b          	l1d_clean_all
+    BOARD_DCACHE_FLUSH(g_c, sizeof g_c[0]);
+    80000516:	0010702b          	l1d_clean_all
+    BOARD_FENCE();
+    8000051a:	0330000f          	fence	rw,rw
+    __asm__ volatile("csrw 0x803, %0" :: "r"(m));
+    8000051e:	4785                	li	a5,1
+    80000520:	80379073          	csrw	mtilem,a5
+    __asm__ volatile("csrw 0x804, %0" :: "r"(n));
+    80000524:	80479073          	csrw	mtilen,a5
+    __asm__ volatile("csrw 0x805, %0" :: "r"(k));
+    80000528:	02000793          	li	a5,32
+    8000052c:	80579073          	csrw	mtilek,a5
+    __asm__ volatile("mzero acc0");
+    80000530:	0c00020b          	mzero	acc0
+    { register const void *p __asm__("a0") = g_a; register long s __asm__("a1") = 64;
+    80000534:	0001f517          	auipc	a0,0x1f
+    80000538:	b4c50513          	addi	a0,a0,-1204 # 8001f080 <g_a>
+    8000053c:	04000593          	li	a1,64
+      __asm__ volatile("mlae16 tr0,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
+    80000540:	04b5040b          	mlae16	tr0,(a0),a1
+    { register const void *p __asm__("a0") = g_b; register long s __asm__("a1") = 64;
+    80000544:	0001d517          	auipc	a0,0x1d
+    80000548:	afc50513          	addi	a0,a0,-1284 # 8001d040 <g_b>
+      __asm__ volatile("mlbe16 tr1,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
+    8000054c:	14b5048b          	mlbe16	tr1,(a0),a1
+    __asm__ volatile("mfmacc.s.bf16 acc0,tr1,tr0");
+    80000550:	0a140a0b          	mfmacc.s.bf16	acc0,tr1,tr0
+    { register void *p __asm__("a0") = g_c; register long s __asm__("a1") = 4;
+    80000554:	4591                	li	a1,4
+    80000556:	8522                	mv	a0,s0
+      __asm__ volatile("msce32 acc0,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
+    80000558:	26b50a0b          	msce32	acc0,(a0),a1
+    __asm__ volatile("mrelease");
+    8000055c:	0000000b          	mrelease
+    BOARD_FENCE();
+    80000560:	0330000f          	fence	rw,rw
+    { union { float f; uint32_t u; } r; r.f = g_c[0]; g_ame_raw = r.u; }
+    80000564:	0001b797          	auipc	a5,0x1b
+    80000568:	a9c7a783          	lw	a5,-1380(a5) # 8001b000 <g_c>
+    8000056c:	00001717          	auipc	a4,0x1
+    80000570:	a4f72c23          	sw	a5,-1448(a4) # 80000fc4 <g_ame_raw>
+    BOARD_DCACHE_INVAL(g_c, sizeof g_c[0]);
+    80000574:	0010702b          	l1d_clean_all
+    80000578:	0020702b          	l1d_inv_all
+    BOARD_FENCE();
+    8000057c:	0330000f          	fence	rw,rw
+    union { float f; uint32_t u; } v; v.f = g_c[0];
+    80000580:	0001b497          	auipc	s1,0x1b
+    80000584:	a804a483          	lw	s1,-1408(s1) # 8001b000 <g_c>
+    *BOARD_PTR(uint32_t, a) = v;
+    80000588:	0087f7b7          	lui	a5,0x87f
+    8000058c:	07a2                	slli	a5,a5,0x8
+    8000058e:	c784                	sw	s1,8(a5)
+
+    uint32_t r = ame_selftest();
+    mb_set(MB_AME_RESULT, r);
+    mb_set(MB_AME_RAW, g_ame_raw);
+    80000590:	00001617          	auipc	a2,0x1
+    80000594:	a3462603          	lw	a2,-1484(a2) # 80000fc4 <g_ame_raw>
+    *BOARD_PTR(uint32_t, a) = v;
+    80000598:	0087f737          	lui	a4,0x87f
+    8000059c:	0722                	slli	a4,a4,0x8
+    mb_set(MB_C_ADDR, (uint32_t)(uintptr_t)g_c);
+    8000059e:	0004069b          	sext.w	a3,s0
+    *BOARD_PTR(uint32_t, a) = v;
+    800005a2:	d310                	sw	a2,32(a4)
+    800005a4:	0087f7b7          	lui	a5,0x87f
+    800005a8:	d354                	sw	a3,36(a4)
+    P("step5 ame 1x1x32  "); X(r);
+    800005aa:	00000517          	auipc	a0,0x0
+    800005ae:	77650513          	addi	a0,a0,1910 # 80000d20 <msg_hint+0x300>
+    *BOARD_PTR(uint32_t, a) = v;
+    800005b2:	00879913          	slli	s2,a5,0x8
+    P("step5 ame 1x1x32  "); X(r);
+    800005b6:	b65ff0ef          	jal	8000011a <P>
+    800005ba:	02049513          	slli	a0,s1,0x20
+    800005be:	9101                	srli	a0,a0,0x20
+    800005c0:	bb5ff0ef          	jal	80000174 <X>
+    if (r != 0x42000000u) {
+    800005c4:	420007b7          	lui	a5,0x42000
+    800005c8:	04f48c63          	beq	s1,a5,80000620 <qwen3_main+0x340>
+        P("  * 期望 0x42000000 (=32.0f)\n");
+    800005cc:	00000517          	auipc	a0,0x0
+    800005d0:	76c50513          	addi	a0,a0,1900 # 80000d38 <msg_hint+0x318>
+    800005d4:	b47ff0ef          	jal	8000011a <P>
+        P("      同步前读到 ");
+    800005d8:	00000517          	auipc	a0,0x0
+    800005dc:	78050513          	addi	a0,a0,1920 # 80000d58 <msg_hint+0x338>
+    800005e0:	b3bff0ef          	jal	8000011a <P>
+        X(g_ame_raw);
+    800005e4:	00001517          	auipc	a0,0x1
+    800005e8:	9e056503          	lwu	a0,-1568(a0) # 80000fc4 <g_ame_raw>
+    800005ec:	b89ff0ef          	jal	80000174 <X>
+        P("\n      结果缓冲 @ ");
+    800005f0:	00000517          	auipc	a0,0x0
+    800005f4:	78050513          	addi	a0,a0,1920 # 80000d70 <msg_hint+0x350>
+    800005f8:	b23ff0ef          	jal	8000011a <P>
+        X((unsigned long)(uintptr_t)g_c);
+    800005fc:	8522                	mv	a0,s0
+    800005fe:	b77ff0ef          	jal	80000174 <X>
+        P("\n      两者都是 0xbf800000 则说明 msce32 没写进来；\n");
+    80000602:	00000517          	auipc	a0,0x0
+    80000606:	78650513          	addi	a0,a0,1926 # 80000d88 <msg_hint+0x368>
+    8000060a:	b11ff0ef          	jal	8000011a <P>
+        P("      可让 host 经 PCIe 直读上面的地址，绕开 L1D 看 DDR 真值\n");
+    8000060e:	00000517          	auipc	a0,0x0
+    80000612:	7c250513          	addi	a0,a0,1986 # 80000dd0 <msg_hint+0x3b0>
+    80000616:	b05ff0ef          	jal	8000011a <P>
+        fail(5);
+    8000061a:	4515                	li	a0,5
+    8000061c:	c67ff0ef          	jal	80000282 <fail>
+    }
+    P("  (=32.0f)   OK\n");
+    80000620:	00001517          	auipc	a0,0x1
+    80000624:	80050513          	addi	a0,a0,-2048 # 80000e20 <msg_hint+0x400>
+    80000628:	af3ff0ef          	jal	8000011a <P>
+    *BOARD_PTR(uint32_t, a) = v;
+    8000062c:	b00007b7          	lui	a5,0xb0000
+    80000630:	05078793          	addi	a5,a5,80 # ffffffffb0000050 <_end+0xffffffff2ff9ef90>
+    80000634:	00f92023          	sw	a5,0(s2)
+    mb_set(MB_STATUS, ST_AME);
+
+    /* ---- 步骤 6：性能采样 ---- */
+    P("step6 perf        采样 "); U(PERF_ITERS); P(" 次 128x128x32 ...\n");
+    80000638:	00001517          	auipc	a0,0x1
+    8000063c:	80050513          	addi	a0,a0,-2048 # 80000e38 <msg_hint+0x418>
+    80000640:	adbff0ef          	jal	8000011a <P>
+    80000644:	3e800513          	li	a0,1000
+    80000648:	b8dff0ef          	jal	800001d4 <U>
+    8000064c:	00001517          	auipc	a0,0x1
+    80000650:	80c50513          	addi	a0,a0,-2036 # 80000e58 <msg_hint+0x438>
+    80000654:	ac7ff0ef          	jal	8000011a <P>
+    for (int i = 0; i < 128 * 32; i++) { g_pa[i] = 0x3F80; g_pb[i] = 0x3F80; }
+    80000658:	6791                	lui	a5,0x4
+    8000065a:	0c807757          	vsetvli	a4,zero,e16,m1,ta,ma
+    8000065e:	f807879b          	addiw	a5,a5,-128 # 3f80 <__jvt_base$+0x3f80>
+    80000662:	5e07c0d7          	vmv.v.x	v1,a5
+    P("step6 perf        采样 "); U(PERF_ITERS); P(" 次 128x128x32 ...\n");
+    80000666:	6605                	lui	a2,0x1
+    80000668:	00013697          	auipc	a3,0x13
+    8000066c:	99868693          	addi	a3,a3,-1640 # 80013000 <g_pb>
+    80000670:	00017717          	auipc	a4,0x17
+    80000674:	99070713          	addi	a4,a4,-1648 # 80017000 <g_pa>
+    80000678:	0c7677d7          	vsetvli	a5,a2,e8,mf2,ta,ma
+    for (int i = 0; i < 128 * 32; i++) { g_pa[i] = 0x3F80; g_pb[i] = 0x3F80; }
+    8000067c:	020750a7          	vse16.v	v1,(a4)
+    80000680:	8e1d                	sub	a2,a2,a5
+    80000682:	0786                	slli	a5,a5,0x1
+    80000684:	973e                	add	a4,a4,a5
+    80000686:	0206d0a7          	vse16.v	v1,(a3)
+    8000068a:	96be                	add	a3,a3,a5
+    8000068c:	f675                	bnez	a2,80000678 <qwen3_main+0x398>
+    BOARD_DCACHE_CLEAN(g_pa, 128 * 32 * sizeof g_pa[0]);
+    8000068e:	0010702b          	l1d_clean_all
+    BOARD_DCACHE_CLEAN(g_pb, 128 * 32 * sizeof g_pb[0]);
+    80000692:	0010702b          	l1d_clean_all
+    BOARD_FENCE();
+    80000696:	0330000f          	fence	rw,rw
+    __asm__ volatile("csrw 0x803, %0" :: "r"(m));
+    8000069a:	08000793          	li	a5,128
+    8000069e:	80379073          	csrw	mtilem,a5
+    __asm__ volatile("csrw 0x804, %0" :: "r"(n));
+    800006a2:	80479073          	csrw	mtilen,a5
+    __asm__ volatile("csrw 0x805, %0" :: "r"(k));
+    800006a6:	02000793          	li	a5,32
+    800006aa:	80579073          	csrw	mtilek,a5
+    __asm__ volatile("mzero acc0");
+    800006ae:	0c00020b          	mzero	acc0
+    __asm__ volatile("csrr %0, mcycle" : "=r"(v));
+    800006b2:	b0002773          	csrr	a4,mcycle
+    800006b6:	3e800793          	li	a5,1000
+        { register const void *p __asm__("a0") = g_pa; register long s __asm__("a1") = 64;
+    800006ba:	00017517          	auipc	a0,0x17
+    800006be:	94650513          	addi	a0,a0,-1722 # 80017000 <g_pa>
+    800006c2:	04000593          	li	a1,64
+          __asm__ volatile("mlae16 tr0,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
+    800006c6:	04b5040b          	mlae16	tr0,(a0),a1
+        { register const void *p __asm__("a0") = g_pb; register long s __asm__("a1") = 64;
+    800006ca:	00013517          	auipc	a0,0x13
+    800006ce:	93650513          	addi	a0,a0,-1738 # 80013000 <g_pb>
+          __asm__ volatile("mlbe16 tr1,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
+    800006d2:	14b5048b          	mlbe16	tr1,(a0),a1
+        __asm__ volatile("mfmacc.s.bf16 acc0,tr1,tr0");
+    800006d6:	0a140a0b          	mfmacc.s.bf16	acc0,tr1,tr0
+    for (int it = 0; it < PERF_ITERS; it++) {
+    800006da:	37fd                	addiw	a5,a5,-1
+    800006dc:	fff9                	bnez	a5,800006ba <qwen3_main+0x3da>
+    __asm__ volatile("csrr %0, mcycle" : "=r"(v));
+    800006de:	b0002473          	csrr	s0,mcycle
+    { register void *p __asm__("a0") = g_pc; register long s __asm__("a1") = 128 * 4;
+    800006e2:	00001517          	auipc	a0,0x1
+    800006e6:	91e50513          	addi	a0,a0,-1762 # 80001000 <g_pc>
+    800006ea:	20000593          	li	a1,512
+      __asm__ volatile("msce32 acc0,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
+    800006ee:	26b50a0b          	msce32	acc0,(a0),a1
+    __asm__ volatile("mrelease");
+    800006f2:	0000000b          	mrelease
+    *BOARD_PTR(uint32_t, a) = v;
+    800006f6:	0087f6b7          	lui	a3,0x87f
+    return t1 - t0;
+    800006fa:	8c19                	sub	s0,s0,a4
+    uint64_t cyc = perf_sample();
+    mb_set(MB_CYCLES_LO, (uint32_t)cyc);
+    800006fc:	0004061b          	sext.w	a2,s0
+    *BOARD_PTR(uint32_t, a) = v;
+    80000700:	06a2                	slli	a3,a3,0x8
+    80000702:	8736                	mv	a4,a3
+    80000704:	c6d0                	sw	a2,12(a3)
+    mb_set(MB_CYCLES_HI, (uint32_t)(cyc >> 32));
+    80000706:	42045693          	srai	a3,s0,0x20
+    *BOARD_PTR(uint32_t, a) = v;
+    8000070a:	cb14                	sw	a3,16(a4)
+    8000070c:	3e800913          	li	s2,1000
+    80000710:	01272a23          	sw	s2,20(a4)
+    mb_set(MB_ITERS, PERF_ITERS);
+
+    P("      总周期 "); U((unsigned long)cyc);
+    80000714:	00000517          	auipc	a0,0x0
+    80000718:	75c50513          	addi	a0,a0,1884 # 80000e70 <msg_hint+0x450>
+    8000071c:	9ffff0ef          	jal	8000011a <P>
+    80000720:	8522                	mv	a0,s0
+    80000722:	ab3ff0ef          	jal	800001d4 <U>
+    P("   每次 "); U((unsigned long)(cyc / PERF_ITERS)); P(" 周期\n");
+    80000726:	00000517          	auipc	a0,0x0
+    8000072a:	76250513          	addi	a0,a0,1890 # 80000e88 <msg_hint+0x468>
+    8000072e:	9edff0ef          	jal	8000011a <P>
+    80000732:	03245433          	divu	s0,s0,s2
+#endif
+#if BOARD_CPU_HZ
+    /* 用实测周期数外推 decode 一个 token 的时间。
+     * 145500 = 28 层 × 3840 + lm_head 的 1187×32，M=1 的 mfmacc 总数。 */
+    unsigned long per = (unsigned long)(cyc / PERF_ITERS);
+    unsigned long ms  = (unsigned long)((145500ULL * per * 1000ULL) / BOARD_CPU_HZ);
+    80000736:	026264b7          	lui	s1,0x2626
+    8000073a:	a0048493          	addi	s1,s1,-1536 # 2625a00 <_stack_size+0x25e5a00>
+    P("   每次 "); U((unsigned long)(cyc / PERF_ITERS)); P(" 周期\n");
+    8000073e:	8522                	mv	a0,s0
+    80000740:	a95ff0ef          	jal	800001d4 <U>
+    80000744:	00000517          	auipc	a0,0x0
+    80000748:	75450513          	addi	a0,a0,1876 # 80000e98 <msg_hint+0x478>
+    8000074c:	9cfff0ef          	jal	8000011a <P>
+    unsigned long ms  = (unsigned long)((145500ULL * per * 1000ULL) / BOARD_CPU_HZ);
+    80000750:	08ac27b7          	lui	a5,0x8ac2
+    80000754:	76078793          	addi	a5,a5,1888 # 8ac2760 <_stack_size+0x8a82760>
+    80000758:	02f40433          	mul	s0,s0,a5
+    P("      @ "); U(BOARD_CPU_HZ / 1000000); P(" MHz 外推：约 ");
+    8000075c:	00000517          	auipc	a0,0x0
+    80000760:	74c50513          	addi	a0,a0,1868 # 80000ea8 <msg_hint+0x488>
+    80000764:	9b7ff0ef          	jal	8000011a <P>
+    80000768:	02800513          	li	a0,40
+    8000076c:	a69ff0ef          	jal	800001d4 <U>
+    80000770:	00000517          	auipc	a0,0x0
+    80000774:	74850513          	addi	a0,a0,1864 # 80000eb8 <msg_hint+0x498>
+    80000778:	9a3ff0ef          	jal	8000011a <P>
+    unsigned long ms  = (unsigned long)((145500ULL * per * 1000ULL) / BOARD_CPU_HZ);
+    8000077c:	029454b3          	divu	s1,s0,s1
+    U(ms); P(" ms/token");
+    80000780:	8526                	mv	a0,s1
+    80000782:	a53ff0ef          	jal	800001d4 <U>
+    80000786:	00000517          	auipc	a0,0x0
+    8000078a:	74a50513          	addi	a0,a0,1866 # 80000ed0 <msg_hint+0x4b0>
+    8000078e:	98dff0ef          	jal	8000011a <P>
+    if (ms) { P("  ("); U(1000 / (ms ? ms : 1)); P(" token/s)"); }
+    80000792:	026267b7          	lui	a5,0x2626
+    80000796:	9ff78793          	addi	a5,a5,-1537 # 26259ff <_stack_size+0x25e59ff>
+    8000079a:	0c87e863          	bltu	a5,s0,8000086a <qwen3_main+0x58a>
+    P("\n");
+    8000079e:	00000517          	auipc	a0,0x0
+    800007a2:	4e250513          	addi	a0,a0,1250 # 80000c80 <msg_hint+0x260>
+    800007a6:	975ff0ef          	jal	8000011a <P>
+#endif
+    if (!g_failmask) mb_set(MB_STATUS, ST_PERF);
+    800007aa:	00001497          	auipc	s1,0x1
+    800007ae:	8164a483          	lw	s1,-2026(s1) # 80000fc0 <g_failmask>
+    800007b2:	ec9d                	bnez	s1,800007f0 <qwen3_main+0x510>
+    *BOARD_PTR(uint32_t, a) = v;
+    800007b4:	0087f437          	lui	s0,0x87f
+    800007b8:	b00007b7          	lui	a5,0xb0000
+    800007bc:	0422                	slli	s0,s0,0x8
+    800007be:	06078793          	addi	a5,a5,96 # ffffffffb0000060 <_end+0xffffffff2ff9efa0>
+    800007c2:	c01c                	sw	a5,0(s0)
+
+    /* ---- 裁决 ----
+     * 必须看累计的 failmask，不能只看跑到了最后一步：
+     * step3 是软失败（继续跑以便一次收齐信息），若在这里无条件报 ALL PASS，
+     * 上板时会把"PCIe 没写进去"当成全部通过，是最坏的一种误导。 */
+    if (g_failmask) {
+    800007c4:	00000497          	auipc	s1,0x0
+    800007c8:	7fc4a483          	lw	s1,2044(s1) # 80000fc0 <g_failmask>
+    800007cc:	e095                	bnez	s1,800007f0 <qwen3_main+0x510>
+        *BOARD_PTR(uint32_t, BOARD_POWEROFF_ADDR) = BOARD_POWEROFF_FAIL;
+#endif
+        for (;;) { }
+    }
+
+    P("\n>>> ALL PASS —— 基础通路全通，可以进 L1（AME 向量包）\n");
+    800007ce:	00000517          	auipc	a0,0x0
+    800007d2:	78250513          	addi	a0,a0,1922 # 80000f50 <msg_hint+0x530>
+    800007d6:	945ff0ef          	jal	8000011a <P>
+    *BOARD_PTR(uint32_t, a) = v;
+    800007da:	0087f7b7          	lui	a5,0x87f
+    800007de:	07a2                	slli	a5,a5,0x8
+    800007e0:	b0000737          	lui	a4,0xb0000
+    800007e4:	0007ae23          	sw	zero,28(a5) # 87f01c <_stack_size+0x83f01c>
+    800007e8:	0aa70793          	addi	a5,a4,170 # ffffffffb00000aa <_end+0xffffffff2ff9efea>
+    800007ec:	c01c                	sw	a5,0(s0)
+    mb_set(MB_FAILMASK, 0);
+    mb_set(MB_STATUS, ST_ALLPASS);
+#if BOARD_HAS_POWEROFF
+    *BOARD_PTR(uint32_t, BOARD_POWEROFF_ADDR) = BOARD_POWEROFF_PASS;
+#endif
+    for (;;) { }
+    800007ee:	a001                	j	800007ee <qwen3_main+0x50e>
+        P("\n>>> FAIL —— 以下步骤未通过：");
+    800007f0:	00000517          	auipc	a0,0x0
+    800007f4:	70850513          	addi	a0,a0,1800 # 80000ef8 <msg_hint+0x4d8>
+    800007f8:	4405                	li	s0,1
+    800007fa:	921ff0ef          	jal	8000011a <P>
+            if (g_failmask & (1u << i)) { P(" step"); U((unsigned long)i); }
+    800007fe:	89a2                	mv	s3,s0
+        for (int i = 1; i <= 6; i++)
+    80000800:	491d                	li	s2,7
+    80000802:	a021                	j	8000080a <qwen3_main+0x52a>
+    80000804:	0405                	addi	s0,s0,1 # 87f001 <_stack_size+0x83f001>
+    80000806:	03240063          	beq	s0,s2,80000826 <qwen3_main+0x546>
+            if (g_failmask & (1u << i)) { P(" step"); U((unsigned long)i); }
+    8000080a:	008997bb          	sllw	a5,s3,s0
+    8000080e:	8fe5                	and	a5,a5,s1
+    80000810:	dbf5                	beqz	a5,80000804 <qwen3_main+0x524>
+    80000812:	00000517          	auipc	a0,0x0
+    80000816:	71650513          	addi	a0,a0,1814 # 80000f28 <msg_hint+0x508>
+    8000081a:	901ff0ef          	jal	8000011a <P>
+    8000081e:	8522                	mv	a0,s0
+    80000820:	9b5ff0ef          	jal	800001d4 <U>
+    80000824:	b7c5                	j	80000804 <qwen3_main+0x524>
+        P("\n    failmask "); X(g_failmask);
+    80000826:	00000517          	auipc	a0,0x0
+    8000082a:	70a50513          	addi	a0,a0,1802 # 80000f30 <msg_hint+0x510>
+    8000082e:	8edff0ef          	jal	8000011a <P>
+    80000832:	02049513          	slli	a0,s1,0x20
+    80000836:	9101                	srli	a0,a0,0x20
+    80000838:	93dff0ef          	jal	80000174 <X>
+        P("  (mailbox "); X(MB_FAILMASK); P(")\n");
+    8000083c:	00000517          	auipc	a0,0x0
+    80000840:	70450513          	addi	a0,a0,1796 # 80000f40 <msg_hint+0x520>
+    80000844:	8d7ff0ef          	jal	8000011a <P>
+    80000848:	0087f537          	lui	a0,0x87f
+    8000084c:	0522                	slli	a0,a0,0x8
+    8000084e:	0571                	addi	a0,a0,28 # 87f01c <_stack_size+0x83f01c>
+    80000850:	925ff0ef          	jal	80000174 <X>
+    80000854:	00000517          	auipc	a0,0x0
+    80000858:	3bc50513          	addi	a0,a0,956 # 80000c10 <msg_hint+0x1f0>
+    8000085c:	8bfff0ef          	jal	8000011a <P>
+    *BOARD_PTR(uint32_t, a) = v;
+    80000860:	0087f7b7          	lui	a5,0x87f
+    80000864:	07a2                	slli	a5,a5,0x8
+    80000866:	cfc4                	sw	s1,28(a5)
+        for (;;) { }
+    80000868:	a001                	j	80000868 <qwen3_main+0x588>
+    if (ms) { P("  ("); U(1000 / (ms ? ms : 1)); P(" token/s)"); }
+    8000086a:	00000517          	auipc	a0,0x0
+    8000086e:	67650513          	addi	a0,a0,1654 # 80000ee0 <msg_hint+0x4c0>
+    80000872:	8a9ff0ef          	jal	8000011a <P>
+    80000876:	02995533          	divu	a0,s2,s1
+    8000087a:	95bff0ef          	jal	800001d4 <U>
+    8000087e:	00000517          	auipc	a0,0x0
+    80000882:	66a50513          	addi	a0,a0,1642 # 80000ee8 <msg_hint+0x4c8>
+    80000886:	895ff0ef          	jal	8000011a <P>
+    8000088a:	bf11                	j	8000079e <qwen3_main+0x4be>
+
+000000008000088c <memcpy>:
+NO_LOOP_IDIOM
+void *memcpy(void *dst, const void *src, size_t n) {
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    /* 双方同余时按 8 字节走，快一个数量级 */
+    if (((uintptr_t)d & 7u) == ((uintptr_t)s & 7u)) {
+    8000088c:	00b547b3          	xor	a5,a0,a1
+    80000890:	8b9d                	andi	a5,a5,7
+    80000892:	e7ad                	bnez	a5,800008fc <memcpy+0x70>
+    uint8_t *d = (uint8_t *)dst;
+    80000894:	87aa                	mv	a5,a0
+        while (n && ((uintptr_t)d & 7u)) { *d++ = *s++; n--; }
+    80000896:	ea11                	bnez	a2,800008aa <memcpy+0x1e>
+    80000898:	8082                	ret
+    8000089a:	0005c703          	lbu	a4,0(a1)
+    8000089e:	167d                	addi	a2,a2,-1 # fff <__jvt_base$+0xfff>
+    800008a0:	0585                	addi	a1,a1,1
+    800008a2:	00e78023          	sb	a4,0(a5) # 87f000 <_stack_size+0x83f000>
+    800008a6:	0785                	addi	a5,a5,1
+    800008a8:	ca29                	beqz	a2,800008fa <memcpy+0x6e>
+    800008aa:	0077f713          	andi	a4,a5,7
+    800008ae:	f775                	bnez	a4,8000089a <memcpy+0xe>
+        uint64_t *d8 = (uint64_t *)d;
+        const uint64_t *s8 = (const uint64_t *)s;
+        while (n >= 8) { *d8++ = *s8++; n -= 8; }
+    800008b0:	471d                	li	a4,7
+    800008b2:	02c77a63          	bgeu	a4,a2,800008e6 <memcpy+0x5a>
+    800008b6:	ff860313          	addi	t1,a2,-8
+    800008ba:	ff837893          	andi	a7,t1,-8
+    800008be:	08a1                	addi	a7,a7,8
+    800008c0:	98be                	add	a7,a7,a5
+    800008c2:	86ae                	mv	a3,a1
+    800008c4:	873e                	mv	a4,a5
+    800008c6:	0006b803          	ld	a6,0(a3) # 87f000 <_stack_size+0x83f000>
+    800008ca:	0721                	addi	a4,a4,8
+    800008cc:	06a1                	addi	a3,a3,8
+    800008ce:	ff073c23          	sd	a6,-8(a4)
+    800008d2:	ff171ae3          	bne	a4,a7,800008c6 <memcpy+0x3a>
+    800008d6:	ff837713          	andi	a4,t1,-8
+    800008da:	05a1                	addi	a1,a1,8
+    800008dc:	07a1                	addi	a5,a5,8
+    800008de:	8a1d                	andi	a2,a2,7
+    800008e0:	95ba                	add	a1,a1,a4
+    800008e2:	97ba                	add	a5,a5,a4
+        d = (uint8_t *)d8; s = (const uint8_t *)s8;
+    }
+    while (n--) *d++ = *s++;
+    800008e4:	ce11                	beqz	a2,80000900 <memcpy+0x74>
+    800008e6:	963e                	add	a2,a2,a5
+    800008e8:	0005c703          	lbu	a4,0(a1)
+    800008ec:	0785                	addi	a5,a5,1
+    800008ee:	0585                	addi	a1,a1,1
+    800008f0:	fee78fa3          	sb	a4,-1(a5)
+    800008f4:	fec79ae3          	bne	a5,a2,800008e8 <memcpy+0x5c>
+    800008f8:	8082                	ret
+    return dst;
+}
+    800008fa:	8082                	ret
+    uint8_t *d = (uint8_t *)dst;
+    800008fc:	87aa                	mv	a5,a0
+    while (n--) *d++ = *s++;
+    800008fe:	f665                	bnez	a2,800008e6 <memcpy+0x5a>
+    80000900:	8082                	ret
+
+0000000080000902 <memset>:
+
+NO_LOOP_IDIOM
+void *memset(void *dst, int c, size_t n) {
+    uint8_t *d = (uint8_t *)dst;
+    uint8_t v = (uint8_t)c;
+    80000902:	0ff5f593          	zext.b	a1,a1
+    uint8_t *d = (uint8_t *)dst;
+    80000906:	87aa                	mv	a5,a0
+    while (n && ((uintptr_t)d & 7u)) { *d++ = v; n--; }
+    80000908:	e619                	bnez	a2,80000916 <memset+0x14>
+    8000090a:	8082                	ret
+    8000090c:	167d                	addi	a2,a2,-1
+    8000090e:	00b78023          	sb	a1,0(a5)
+    80000912:	0785                	addi	a5,a5,1
+    80000914:	ca29                	beqz	a2,80000966 <memset+0x64>
+    80000916:	0077f713          	andi	a4,a5,7
+    8000091a:	fb6d                	bnez	a4,8000090c <memset+0xa>
+    uint64_t w = 0x0101010101010101ull * v;
+    8000091c:	01010737          	lui	a4,0x1010
+    80000920:	10170713          	addi	a4,a4,257 # 1010101 <_stack_size+0xfd0101>
+    80000924:	02071813          	slli	a6,a4,0x20
+    80000928:	983a                	add	a6,a6,a4
+    uint64_t *d8 = (uint64_t *)d;
+    while (n >= 8) { *d8++ = w; n -= 8; }
+    8000092a:	471d                	li	a4,7
+    uint64_t w = 0x0101010101010101ull * v;
+    8000092c:	03058833          	mul	a6,a1,a6
+    while (n >= 8) { *d8++ = w; n -= 8; }
+    80000930:	02c77463          	bgeu	a4,a2,80000958 <memset+0x56>
+    80000934:	ff860893          	addi	a7,a2,-8
+    80000938:	ff88f693          	andi	a3,a7,-8
+    8000093c:	06a1                	addi	a3,a3,8
+    8000093e:	96be                	add	a3,a3,a5
+    uint64_t *d8 = (uint64_t *)d;
+    80000940:	873e                	mv	a4,a5
+    while (n >= 8) { *d8++ = w; n -= 8; }
+    80000942:	0721                	addi	a4,a4,8
+    80000944:	ff073c23          	sd	a6,-8(a4)
+    80000948:	fed71de3          	bne	a4,a3,80000942 <memset+0x40>
+    8000094c:	ff88f893          	andi	a7,a7,-8
+    80000950:	07a1                	addi	a5,a5,8
+    80000952:	8a1d                	andi	a2,a2,7
+    80000954:	97c6                	add	a5,a5,a7
+    d = (uint8_t *)d8;
+    while (n--) *d++ = v;
+    80000956:	ca01                	beqz	a2,80000966 <memset+0x64>
+    80000958:	0c067057          	vsetvli	zero,a2,e8,m1,ta,ma
+    8000095c:	5e05c0d7          	vmv.v.x	v1,a1
+    80000960:	020780a7          	vse8.v	v1,(a5)
+    return dst;
+    80000964:	8082                	ret
+}
+    80000966:	8082                	ret
+
+0000000080000968 <memmove>:
+
+NO_LOOP_IDIOM
+void *memmove(void *dst, const void *src, size_t n) {
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    if (d == s || n == 0) return dst;
+    80000968:	02b50a63          	beq	a0,a1,8000099c <memmove+0x34>
+    8000096c:	ca05                	beqz	a2,8000099c <memmove+0x34>
+    if (d < s) { while (n--) *d++ = *s++; }
+    8000096e:	00b57d63          	bgeu	a0,a1,80000988 <memmove+0x20>
+    80000972:	962a                	add	a2,a2,a0
+    uint8_t *d = (uint8_t *)dst;
+    80000974:	87aa                	mv	a5,a0
+    if (d < s) { while (n--) *d++ = *s++; }
+    80000976:	0005c703          	lbu	a4,0(a1)
+    8000097a:	0785                	addi	a5,a5,1
+    8000097c:	0585                	addi	a1,a1,1
+    8000097e:	fee78fa3          	sb	a4,-1(a5)
+    80000982:	fec79ae3          	bne	a5,a2,80000976 <memmove+0xe>
+    80000986:	8082                	ret
+    else       { d += n; s += n; while (n--) *--d = *--s; }
+    80000988:	95b2                	add	a1,a1,a2
+    8000098a:	962a                	add	a2,a2,a0
+    8000098c:	fff5c783          	lbu	a5,-1(a1)
+    80000990:	167d                	addi	a2,a2,-1
+    80000992:	15fd                	addi	a1,a1,-1
+    80000994:	00f60023          	sb	a5,0(a2)
+    80000998:	fec51ae3          	bne	a0,a2,8000098c <memmove+0x24>
+    return dst;
+}
+    8000099c:	8082                	ret
+
+000000008000099e <memcmp>:
+
+NO_LOOP_IDIOM
+int memcmp(const void *a, const void *b, size_t n) {
+    const uint8_t *p = (const uint8_t *)a, *q = (const uint8_t *)b;
+    while (n--) { if (*p != *q) return (int)*p - (int)*q; p++; q++; }
+    8000099e:	c205                	beqz	a2,800009be <memcmp+0x20>
+    800009a0:	962a                	add	a2,a2,a0
+    800009a2:	a019                	j	800009a8 <memcmp+0xa>
+    800009a4:	00c50d63          	beq	a0,a2,800009be <memcmp+0x20>
+    800009a8:	00054783          	lbu	a5,0(a0)
+    800009ac:	0005c703          	lbu	a4,0(a1)
+    800009b0:	0505                	addi	a0,a0,1
+    800009b2:	0585                	addi	a1,a1,1
+    800009b4:	fee788e3          	beq	a5,a4,800009a4 <memcmp+0x6>
+    800009b8:	40e7853b          	subw	a0,a5,a4
+    800009bc:	8082                	ret
+    return 0;
+    800009be:	4501                	li	a0,0
+}
+    800009c0:	8082                	ret
+
+00000000800009c2 <strlen>:
+
+NO_LOOP_IDIOM
+size_t strlen(const char *s) {
+    const char *p = s;
+    while (*p) p++;
+    800009c2:	00054783          	lbu	a5,0(a0)
+    800009c6:	cb89                	beqz	a5,800009d8 <strlen+0x16>
+    const char *p = s;
+    800009c8:	87aa                	mv	a5,a0
+    while (*p) p++;
+    800009ca:	0017c703          	lbu	a4,1(a5)
+    800009ce:	0785                	addi	a5,a5,1
+    800009d0:	ff6d                	bnez	a4,800009ca <strlen+0x8>
+    return (size_t)(p - s);
+    800009d2:	40a78533          	sub	a0,a5,a0
+    800009d6:	8082                	ret
+    while (*p) p++;
+    800009d8:	4501                	li	a0,0
+}
+    800009da:	8082                	ret

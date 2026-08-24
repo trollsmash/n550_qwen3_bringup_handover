@@ -80,35 +80,58 @@ static uint32_t mb_get(unsigned long a) {
 
 /* ══════════════ 串口 ══════════════
  *
- * 默认**不做初始化**：QEMU virt 与多数 FPGA 参考设计里 bootrom 已配好。
- * 若上板后 mailbox 能走到 ST_UART 之后但屏幕一个字都没有，
- * 就是波特率没配 —— 打开 -DUART_NEEDS_INIT 并填对下面的分频值。
- * 分频值 = UART 输入时钟 / (16 × 波特率)，需要硬件团队给输入时钟。 */
-#define UART_THR   0x00
-#define UART_IER   0x01
-#define UART_FCR   0x02
-#define UART_LCR   0x03
-#define UART_LSR   0x05
-#define UART_DLL   0x00      /* DLAB=1 时 */
-#define UART_DLM   0x01
+ * S2C 板上**由程序自己配波特率**（board.h 的 BOARD_UART_NEEDS_INIT），
+ * 不指望 bootrom 已配好；QEMU virt 则开箱即用，那边这一项为 0。
+ *
+ * 上板后若 mailbox 走过 ST_UART 但屏幕一个字都没有，先怀疑寄存器位宽或
+ * 间距（BOARD_UART_32BIT / BOARD_UART_REG_SHIFT）；若有输出但是乱码，
+ * 才是分频不对，改 board.h 的 BOARD_UART_CLK_HZ。 */
+/* 下面是**寄存器索引**，不是字节偏移。
+ * 实际地址 = BOARD_UART_BASE + (索引 << BOARD_UART_REG_SHIFT)。 */
+#define UART_THR   0
+#define UART_IER   1
+#define UART_FCR   2
+#define UART_LCR   3
+#define UART_LSR   5
+#define UART_DLL   0      /* DLAB=1 时与 THR 同址 */
+#define UART_DLM   1
 #define LSR_THRE   0x20
 
-static volatile uint8_t *uart_reg(int off) {
-    return BOARD_PTR(uint8_t, BOARD_UART_BASE + off);
+/* 访问宽度由 board.h 决定：本核的 16550 是 32 位寄存器，
+ * 用字节访问读 LSR 会得到未定义结果。 */
+static inline unsigned long uart_addr(int idx) {
+    return BOARD_UART_BASE + ((unsigned long)idx << BOARD_UART_REG_SHIFT);
+}
+static inline void uart_wr(int idx, uint32_t v) {
+#if BOARD_UART_32BIT
+    *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
+#else
+    *BOARD_PTR(uint8_t, uart_addr(idx)) = (uint8_t)v;
+#endif
+}
+static inline uint32_t uart_rd(int idx) {
+#if BOARD_UART_32BIT
+    return *BOARD_PTR(uint32_t, uart_addr(idx));
+#else
+    return *BOARD_PTR(uint8_t, uart_addr(idx));
+#endif
 }
 
 static void uart_init(void) {
-#ifdef UART_NEEDS_INIT
-#ifndef UART_DIVISOR
-#define UART_DIVISOR 27      /* ⚠ 占位。50MHz/(16*115200)=27.1 —— 但 UART 的
-                              *   输入时钟未必等于 CPU 时钟，务必向硬件确认。 */
+#if BOARD_UART_NEEDS_INIT
+    /* 分频因子由 board.h 从 BOARD_UART_CLK_HZ 算出，改时钟只改那一处。
+     * 配错的现象是满屏乱码，而不是没有输出。 */
+    uart_wr(UART_IER, 0x00);                          /* 关中断 */
+    uart_wr(UART_LCR, 0x80);                          /* DLAB=1，露出分频寄存器 */
+    uart_wr(UART_DLL, BOARD_UART_DIVISOR & 0xFF);
+    uart_wr(UART_DLM, (BOARD_UART_DIVISOR >> 8) & 0xFF);
+    uart_wr(UART_LCR, 0x03);                          /* DLAB=0, 8N1 */
+#if BOARD_UART_HAS_DLF
+    /* 小数分频：DLF 不受 DLAB 控制，放在恢复 DLAB=0 之后写。
+     * 40 MHz 下只用整数分频误差 +3.34%（超容限），补上 DLF 后为 +0.06%。 */
+    uart_wr(BOARD_UART_DLF_IDX, BOARD_UART_DLF_VAL);
 #endif
-    *uart_reg(UART_IER) = 0x00;              /* 关中断 */
-    *uart_reg(UART_LCR) = 0x80;              /* DLAB=1，露出分频寄存器 */
-    *uart_reg(UART_DLL) = UART_DIVISOR & 0xFF;
-    *uart_reg(UART_DLM) = (UART_DIVISOR >> 8) & 0xFF;
-    *uart_reg(UART_LCR) = 0x03;              /* DLAB=0, 8N1 */
-    *uart_reg(UART_FCR) = 0x07;              /* 开 FIFO 并清空 */
+    uart_wr(UART_FCR, 0x07);                          /* 开 FIFO 并清空 */
 #endif
 }
 
@@ -117,8 +140,8 @@ static void putc_(char c) {
      * 否则整个程序静默挂死 —— 而这恰恰是串口没配好时的表现。
      * 宁可字符发飞，也要让程序继续往下走，把 mailbox 填完。 */
     for (int i = 0; i < 100000; i++)
-        if (*uart_reg(UART_LSR) & LSR_THRE) break;
-    *uart_reg(UART_THR) = (uint8_t)c;
+        if (uart_rd(UART_LSR) & LSR_THRE) break;
+    uart_wr(UART_THR, (uint8_t)c);
 }
 static void P(const char *s) { while (*s) { if (*s == '\n') putc_('\r'); putc_(*s++); } }
 static void U(unsigned long v) {
@@ -193,9 +216,9 @@ static uint32_t ame_selftest(void) {
  *
  *   decode 一个 token 需要约 145500 次 mfmacc
  *     （28 层 × 3840，加 lm_head 的 1187×32；M=1 时 tile 利用率仅 1/128）
- *   每次 X 周期 => 时间 = 145500 × X / 50MHz
- *     X=100  => 0.29 秒/token
- *     X=1000 => 2.9 秒/token
+ *   每次 X 周期 => 时间 = 145500 × X / 40MHz
+ *     X=100  => 0.36 秒/token
+ *     X=1000 => 3.6 秒/token
  *
  * 在此之前这个数只能靠猜，猜的区间跨了一个数量级。 */
 #define PERF_TILE_M 128

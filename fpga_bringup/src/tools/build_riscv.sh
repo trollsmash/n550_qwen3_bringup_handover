@@ -51,6 +51,20 @@ board_def() {
 #            配 main_qemu.c 里的 __errno 桩即可满足链接
 # string_min.c：提供 memcpy/memset —— 编译器在任何优化级别都可能自行生成这些调用
 CFLAGS_ALL="$RISCV_CFLAGS -ffreestanding -nostdlib -nostartfiles -Wl,-e,_start"
+
+# 从 ELF 派生调试辅助文件。纯派生物，不影响烧录的 bin。
+#
+# 真机出错时手里通常只有一个 mepc（trap handler 打出来的），
+# 没有这两个文件就只能靠猜：
+#   .diss  源码交织反汇编 —— 按地址直接查到出错的指令与对应源码行
+#   .sym   按地址排序的符号表 —— 先看 mepc 落在哪个函数
+# 也可以用 ${CROSS}addr2line -e <elf> <mepc>，但那要求手边装了工具链，
+# 上板调试的同事未必有。
+emit_debug() {
+    local elf="$1" base="${1%.elf}"
+    ${CROSS}objdump -d -S "$elf" > "$base.diss" 2>/dev/null || true
+    ${CROSS}nm -n "$elf"         > "$base.sym"  2>/dev/null || true
+}
 OPS="${OPS:-scalar}"
 BSP="src/bsp/string_min.c src/bsp/libm_stub.c"
 SRCS="src/qwen3.c src/tokenizer.c src/kernels_${KERNEL}.c src/ops_${OPS}.c src/main_qemu.c $BSP"
@@ -63,6 +77,7 @@ build() {
     # shellcheck disable=SC2086
     ${CROSS}gcc $CFLAGS_ALL $SRCS -o "$OUT/qwen3.elf" -lm 2>&1 \
         | grep -viE "LOAD segment with RWX" || true
+    emit_debug "$OUT/qwen3.elf"
     [ -f "$OUT/qwen3.elf" ] || { echo "链接失败" >&2; exit 1; }
     local sz und
     sz=$(stat -c%s "$OUT/qwen3.elf")
@@ -98,8 +113,10 @@ baremetal)
         src/main_baremetal.c $BSP \
         -o "$OUT/qwen3_bm.elf" -lm 2>&1 | grep -viE "LOAD segment with RWX" || true
     [ -f "$OUT/qwen3_bm.elf" ] || { echo "链接失败" >&2; exit 1; }
+    emit_debug "$OUT/qwen3_bm.elf"
     printf "   %s  (%.1f KB)\n" "$OUT/qwen3_bm.elf" \
         "$(echo "$(stat -c%s "$OUT/qwen3_bm.elf")/1024" | bc -l)"
+    printf "   %s  (反汇编，按 mepc 定位用)\n" "$OUT/qwen3_bm.diss"
 
     W="$OUT/w.bin"
     [ -f "$W" ] || cp golden/qwen3-0.6b-bf16.bin "$W"
@@ -166,7 +183,9 @@ bringup)
         | grep -viE "LOAD segment with RWX" || true
     [ -f "$ELF" ] || { echo "链接失败" >&2; exit 1; }
     ${CROSS}objcopy -O binary --gap-fill 0 "$ELF" "$BIN"
+    emit_debug "$ELF"
     printf "   %s  (%s B)\n" "$BIN" "$(stat -c%s "$BIN")"
+    printf "   %s  (反汇编，按 mepc 定位用)\n" "${ELF%.elf}.diss"
 
     MAGIC_ADDR="$(bhex '(BOARD_MBOX_ADDR + 0x80)')"
     ECHO_ADDR="$(bhex '(BOARD_MBOX_ADDR + 0x84)')"
@@ -200,7 +219,7 @@ bringup)
         echo "    判定通过与否一律看 FAILMASK 是否为 0。"
         echo
         echo "  性能换算：每次 mfmacc 周期数 = CYCLES / ITERS"
-        echo "            decode 一个 token 约需 145500 次 => 时间 = 145500 x 周期 / 50MHz"
+        echo "            decode 一个 token 约需 145500 次 => 时间 = 145500 x 周期 / 40MHz"
         exit 0
     fi
     echo "== QEMU 预演 =="

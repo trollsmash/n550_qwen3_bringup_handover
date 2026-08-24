@@ -19,7 +19,28 @@
 #define BOARD_NAME            "QEMU virt"
 
 #define BOARD_UART_BASE       0x10000000
-#define BOARD_UART_16550      1           /* THR@0x00, LSR@0x05, THRE=bit5 */
+#define BOARD_UART_16550      1           /* THR=idx0, LSR=idx5, THRE=bit5 */
+/* QEMU virt 的 16550 是 8 位寄存器、间距 1 字节，且开箱即用无需配波特率。 */
+#ifndef BOARD_UART_32BIT
+#define BOARD_UART_32BIT      0
+#endif
+#ifndef BOARD_UART_REG_SHIFT
+#define BOARD_UART_REG_SHIFT  0
+#endif
+#define BOARD_UART_NEEDS_INIT 0
+#ifndef BOARD_UART_CLK_HZ
+#define BOARD_UART_CLK_HZ     0
+#endif
+#ifndef BOARD_UART_BAUD
+#define BOARD_UART_BAUD       115200
+#endif
+#ifndef BOARD_UART_HAS_DLF
+#define BOARD_UART_HAS_DLF    0
+#endif
+#define BOARD_UART_DLF_IDX    48
+#ifndef BOARD_UART_DLF_BITS
+#define BOARD_UART_DLF_BITS   4
+#endif
 
 #define BOARD_DRAM_BASE       0x80000000
 /* 权重起点。必须在程序镜像（含 BSS 与栈）末端之后 ——
@@ -53,6 +74,63 @@
 #define BOARD_UART_BASE       0x20100000
 #define BOARD_UART_16550      1
 
+/* ★ 寄存器访问宽度与地址间距 —— 这两个值必须与 SoC 的集成方式一致，
+ *   任何一个不对，串口都会彻底不工作（而串口是最直观的观测手段）。
+ *
+ *   BOARD_UART_32BIT      1 = 用 32 位 load/store 访问寄存器
+ *   BOARD_UART_REG_SHIFT  寄存器索引左移几位得到字节偏移
+ *                         2 => 间距 4 字节，LSR(idx5) 在 +0x14   ← 最常见
+ *                         0 => 间距 1 字节，LSR 在 +0x05
+ *
+ *   若上板后 mailbox 能推进到 ST_UART 之后、屏幕却一个字都没有，
+ *   先把 REG_SHIFT 在 2 和 0 之间换一次再排查别的。 */
+#ifndef BOARD_UART_32BIT
+#define BOARD_UART_32BIT      1
+#endif
+#ifndef BOARD_UART_REG_SHIFT
+#define BOARD_UART_REG_SHIFT  2
+#endif
+
+/* UART 的输入时钟。本版板子上与 CPU 主频同为 40 MHz，但仍单独定义：
+ *     BOARD_CPU_HZ        -> 把 mcycle 换算成秒
+ *     BOARD_UART_CLK_HZ   -> 只用来算波特率分频
+ *   两者是各自独立的配置项，只是这一版取值恰好相同。分开写是为了将来动
+ *   CPU 主频时不会连带把波特率改错 —— 那种错误的现象是串口满屏乱码，
+ *   而不是没有输出，很容易往别的方向查。
+ *
+ * 分频因子 = UART_CLK / (16 x 波特率)，见下面的 BOARD_UART_DIVISOR。
+ * 40 MHz / (16 x 115200) = 21.70，除不尽，小数部分靠 DLF 补，
+ * 详见下面 BOARD_UART_HAS_DLF 处的说明。 */
+#ifndef BOARD_UART_CLK_HZ
+#define BOARD_UART_CLK_HZ     40000000
+#endif
+#ifndef BOARD_UART_BAUD
+#define BOARD_UART_BAUD       115200
+#endif
+/* 本板的 UART 需要程序自己配波特率，不能指望 bootrom 已配好。 */
+#define BOARD_UART_NEEDS_INIT 1
+
+/* DLF（Divisor Latch Fraction）—— Synopsys DW_apb_uart 的小数分频寄存器。
+ * 标准 16550 没有它；有了它才能在 40 MHz 这种除不尽的时钟下配准波特率。
+ *
+ * 在本板上它不是锦上添花而是必需：40 MHz 下理想分频 21.70，
+ * 只用整数分频取 21 偏 +3.34%，**已超出 16550 常见的 ±2~3% 容限**；
+ * 补上 DLF 后偏差降到 +0.06%。
+ *
+ *   寄存器索引 48（字节偏移 0xC0 = 48 << REG_SHIFT(2)）
+ *   位宽默认按 4 位（DLF_SIZE=4）。若你们的 IP 配置不同，改 DLF_BITS 即可 ——
+ *   位宽填错只影响精度，不会让串口完全不工作，现象是偶发错帧。
+ *
+ * 访问时机：DLL/DLM 需要 LCR.DLAB=1，而 DLF 不需要，
+ * 因此在恢复 DLAB=0 之后再写它。 */
+#ifndef BOARD_UART_HAS_DLF
+#define BOARD_UART_HAS_DLF    1
+#endif
+#define BOARD_UART_DLF_IDX    48
+#ifndef BOARD_UART_DLF_BITS
+#define BOARD_UART_DLF_BITS   4
+#endif
+
 /* DDR 可用范围（硬件团队确认）：0x8000_0000 ~ 0xEFFF_FFFF，共 1.75 GB。
  * 注意不是整块 8 GB —— 布局余量没有想象中宽裕，核算过：
  *   程序镜像   0x8000_0000  67 MB（含 56.6 MB scratch）
@@ -73,10 +151,45 @@
 /* 真机没有 sifive_test，跑完停在死循环里等 host 读结果。 */
 #define BOARD_HAS_POWEROFF    0
 
-/* CPU 与 AME 同为 50 MHz。用来把 mcycle 换算成真实秒数 ——
+/* CPU 与 AME 同为 40 MHz。用来把 mcycle 换算成真实秒数 ——
  * demo 里报"生成 N 个 token 用时 X 秒"就靠它。 */
-#define BOARD_CPU_HZ          50000000
+#define BOARD_CPU_HZ          40000000
 
+#endif
+
+/* 波特率分频。BOARD_UART_CLK_HZ 为 0 表示该平台无需配置。
+ *
+ * DLL/DLM 存**整数**部分，小数部分交给 DLF（见下）：
+ *   40 MHz / (16 x 115200) = 21.7014
+ *   整数 21 单独使用时实际波特率 119048，误差 +3.34%，已超出容限；
+ *   补上 DLF = 11/16 之后实际 115274，误差 +0.06%。 */
+#if BOARD_UART_CLK_HZ
+/* 16 x 波特率：整数分频与小数分频共用的步长 */
+#define BOARD_UART_STEP      (16 * BOARD_UART_BAUD)
+#if BOARD_UART_HAS_DLF
+/* 有 DLF：整数部分取**截断**，余数交给 DLF 补 */
+#define BOARD_UART_DIVISOR   (BOARD_UART_CLK_HZ / BOARD_UART_STEP)
+#else
+/* 没有 DLF（标准 16550 就没有）：只剩整数分频，此时**四舍五入**才是最优解。
+ * 40 MHz 的例子：截断得 21 -> 误差 +3.34%（**超容限，会错帧**）；
+ *                四舍五入得 22 -> 误差 -1.36%（回到容限内）。
+ * 所以这里不能沿用上面那条截断式 —— 把 BOARD_UART_HAS_DLF 关掉时，
+ * 分频值会自动跟着切换，不需要再手工算一遍。 */
+#define BOARD_UART_DIVISOR       ((BOARD_UART_CLK_HZ + BOARD_UART_STEP / 2) / BOARD_UART_STEP)
+#endif
+#define BOARD_UART_REM       (BOARD_UART_CLK_HZ % BOARD_UART_STEP)
+/* 小数部分 x 2^DLF_BITS，四舍五入（分子加半个步长再整除）：
+ *   小数 0.7014 x 16 = 11.22 -> DLF = 11
+ *   实际波特率 = 40e6 / (16 x (21 + 11/16)) = 115274，误差 +0.06% */
+#define BOARD_UART_DLF_VAL   ((BOARD_UART_REM * (1 << BOARD_UART_DLF_BITS) + BOARD_UART_STEP / 2) / BOARD_UART_STEP)
+#else
+/* 该平台（QEMU virt）无需配波特率，下面几个值不会被用到。
+ * 仍然逐个给出定义，是因为 BOARD_UART_DLF_VAL 引用了 BOARD_UART_REM，
+ * 少定义一个，别处展开时就会撞上未定义标识符。 */
+#define BOARD_UART_STEP      1
+#define BOARD_UART_DIVISOR   1
+#define BOARD_UART_REM       0
+#define BOARD_UART_DLF_VAL   0
 #endif
 
 /* ══════════════════════ 与 host 的结果交换区 ══════════════════════
@@ -116,7 +229,7 @@
  * 用按地址的 Zicbom（cbo.clean/inval/flush）而不是全量 clean/inval：
  *   * 只碰 A 缓冲与 C 矩阵，**不动栈和全局** —— 全量 INV 会丢弃栈上
  *     未写回的脏数据，那种 bug 不当场崩，而是过一会儿在别处读到垃圾
- *   * 代价可控：每 token 约 10 万条 cbo，@50MHz 只有几 ms
+ *   * 代价可控：每 token 约 10 万条 cbo，@40MHz 只有几 ms
  * march 需要带 _zicbom_zicbop_zicboz。
  */
 #ifdef BOARD_S2C

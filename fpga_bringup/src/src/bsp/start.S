@@ -118,9 +118,15 @@ trap_entry:
 
 /* 打印以 NUL 结尾的字符串，地址在 t4，返回地址在 t3 */
 put_str:
-1:  lbu     t1, 0(t4)
+1:  lbu     t1, 0(t4)          /* 读字符串，来自内存，始终按字节 */
     beqz    t1, 2f
+    /* 写 UART THR。THR 的寄存器索引为 0，字节偏移恒为 0，
+     * 不受 REG_SHIFT 影响；这里只需匹配访问宽度。 */
+#if BOARD_UART_32BIT
+    sw      t1, 0(t6)
+#else
     sb      t1, 0(t6)
+#endif
     addi    t4, t4, 1
     j       1b
 2:  jr      t3
@@ -135,7 +141,12 @@ put_hex:
     addi    t2, t2, 'a' - 10
     j       3f
 2:  addi    t2, t2, '0'
-3:  sb      t2, 0(t6)
+3:
+#if BOARD_UART_32BIT
+    sw      t2, 0(t6)
+#else
+    sb      t2, 0(t6)
+#endif
     addi    t1, t1, -4
     bgez    t1, 1b
     jr      t3
