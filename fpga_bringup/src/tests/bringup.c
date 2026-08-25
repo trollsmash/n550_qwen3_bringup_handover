@@ -59,11 +59,11 @@
 #define MB_C_ADDR       MB(0x24)
 #define MB_HOST_MAGIC   MB(0x80)   /* [写] host 上电前写 0x5A5AC3C3 */
 #define MB_HOST_ECHO    MB(0x84)   /* [读] 程序同步后读回的值 */
-/* [读] **未经缓存同步**的裸读值。与 MB_HOST_ECHO 对照即可分清故障类型：
- *   RAW 是垃圾、ECHO 正确  -> L1D 里有陈旧行，同步已把它解决
- *   两者都是垃圾           -> 不是 cache 问题，查地址映射或 host 是否真写了
- *   两者都正确             -> 通路完好 */
-#define MB_HOST_RAW     MB(0x88)
+
+/* [读] 镜像版本，0xMMDDhhmm。host 一读就知道板上跑的是哪一版。 */
+#define MB_BUILD_ID     MB(0x28)
+
+
 
 #define HOST_MAGIC      0x5A5AC3C3u
 
@@ -96,11 +96,6 @@ static void mb_set(unsigned long a, uint32_t v) {
 static uint32_t mb_get(unsigned long a) {
     BOARD_DCACHE_FLUSH((void *)a, sizeof(uint32_t));
     BOARD_FENCE();
-    return *BOARD_PTR(uint32_t, a);
-}
-/* 不做任何同步的裸读，只用于诊断：与 mb_get 的结果一对照，
- * 就知道问题出在 cache 还是别处。 */
-static uint32_t mb_get_raw(unsigned long a) {
     return *BOARD_PTR(uint32_t, a);
 }
 
@@ -181,6 +176,37 @@ static void X(unsigned long v) {
     for (int s = 28; s >= 0; s -= 4) putc_("0123456789abcdef"[(v >> s) & 0xf]);
 }
 
+/* 把编译期假定的板级参数原样打出来。
+ *
+ * 这些值全部来自 board.h，是"我们以为的硬件"。一旦它与实际硬件不符，
+ * 后面所有诊断的推理都会跟着错 —— 例如 cache line 填错，
+ * "两个字段不在同一行、不会互相污染"这类判断就整个不成立。
+ * 与其在远端反复推测，不如把前提打出来让板上的人一眼核对。 */
+static void print_board_config(void) {
+    P("-- 本镜像编译时假定的板级配置（请与实际硬件核对）--\n");
+    P("  DRAM      "); X(BOARD_DRAM_BASE); P(" .. "); X(BOARD_DRAM_END); P("\n");
+    P("  mailbox   "); X(BOARD_MBOX_ADDR); P("\n");
+    P("  权重      "); X(BOARD_WEIGHTS_ADDR);
+    P("   分词器 "); X(BOARD_TOKENIZER_ADDR); P("\n");
+    P("  UART      "); X(BOARD_UART_BASE);
+    P("  "); U(BOARD_UART_32BIT ? 32 : 8); P("bit  shift=");
+    U(BOARD_UART_REG_SHIFT); P("  div="); U(BOARD_UART_DIVISOR);
+#if BOARD_UART_HAS_DLF
+    P("+"); U(BOARD_UART_DLF_VAL); P("/"); U(1u << BOARD_UART_DLF_BITS);
+#endif
+    P("\n");
+    P("  CPU       "); U(BOARD_CPU_HZ); P(" Hz\n");
+#ifdef BOARD_CACHE_LINE
+    P("  cacheline "); U(BOARD_CACHE_LINE); P(" B");
+#ifdef BOARD_L1D_BYTES
+    P("   L1D "); U(BOARD_L1D_BYTES); P(" B");
+#endif
+    P("\n");
+#endif
+}
+
+
+
 /* ══════════════ AME 自测 ══════════════
  * 最小规模：1×1×32，全 1 × 全 1 = 32.0（FP32 位模式 0x42000000）。
  * 结果精确、与累加顺序无关，任何舍入策略都得到同一个值 ——
@@ -234,6 +260,7 @@ static uint32_t ame_selftest(void) {
     union { float f; uint32_t u; } v; v.f = g_c[0];
     return v.u;
 }
+
 
 /* ══════════════ 性能采样 ══════════════
  *
@@ -312,16 +339,15 @@ void qwen3_main(void) {
     /* ---- 步骤 2：串口 ---- */
     uart_init();
     P("\n\n=== S2C BRINGUP (" BOARD_NAME ") ===\n");
+    P("build "); X(BOARD_BUILD_ID); P("   (0xMMDDhhmm)\n");
+    mb_set(MB_BUILD_ID, BOARD_BUILD_ID);
+    print_board_config();
     P("step1 boot        OK   (mailbox @ "); X(BOARD_MBOX_ADDR); P(")\n");
     P("step2 uart        OK   (base "); X(BOARD_UART_BASE); P(")\n");
     mb_set(MB_STATUS, ST_UART);
 
     /* ---- 步骤 3：回读 host 预置的 magic，反证 PCIe 写 DDR 生效 ---- */
-    /* 先裸读、再同步读，两个值都留给 host —— 一次上板就能定位。
-     * 顺序不能反：同步读会改变 cache 状态，之后再裸读就看不出原貌了。 */
-    uint32_t raw = mb_get_raw(MB_HOST_MAGIC);
     uint32_t got = mb_get(MB_HOST_MAGIC);
-    mb_set(MB_HOST_RAW, raw);
     mb_set(MB_HOST_ECHO, got);
     P("step3 pcie magic  ");
     if (got == HOST_MAGIC) {
@@ -331,9 +357,6 @@ void qwen3_main(void) {
         /* 不直接停机：后面几步与 PCIe 无关，继续跑能一次收集到更多信息。
          * host 侧看 MB_HOST_ECHO 就知道实际读到的是什么。 */
         P("MISMATCH  期望 "); X(HOST_MAGIC); P("  实际 "); X(got); P("\n");
-        P("      裸读 "); X(raw); P("   同步后 "); X(got); P("\n");
-        if (raw != got)
-            P("      => 两者不同：L1D 里确有陈旧行，读侧同步已生效\n");
         P("      => host 是否在放开复位前往 "); X(MB_HOST_MAGIC); P(" 写过 magic？\n");
         mark_fail(3);
     }
@@ -370,6 +393,7 @@ void qwen3_main(void) {
     }
     P("  (=32.0f)   OK\n");
     mb_set(MB_STATUS, ST_AME);
+
 
     /* ---- 步骤 6：性能采样 ---- */
     P("step6 perf        采样 "); U(PERF_ITERS); P(" 次 128x128x32 ...\n");

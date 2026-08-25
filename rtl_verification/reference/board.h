@@ -43,6 +43,8 @@
 #endif
 
 #define BOARD_DRAM_BASE       0x80000000
+/* QEMU 以 -m 2G 启动（见 build_riscv.sh），故 DRAM 到 0xFFFFFFFF。 */
+#define BOARD_DRAM_END        0xFFFFFFFF
 /* 权重起点。必须在程序镜像（含 BSS 与栈）末端之后 ——
  * start.S 清 BSS 时会把重叠区域擦成 0，症状是"权重 magic 不对"，
  * 看起来却像外部加载没生效。main_baremetal.c 的 check_layout() 守这条。 */
@@ -279,6 +281,14 @@
  * 真机若想改用按地址，编译时加 -DBOARD_USE_CBO_RANGE。 */
 #if defined(BOARD_S2C) && !defined(BOARD_USE_CBO_RANGE)
 #define BOARD_USE_L1D_ALL 1
+#endif
+
+/* 镜像版本标识。构建脚本会用 -D 注入 0xMMDDhhmm；
+ * 为 0 表示这份镜像不是走标准构建流程编出来的。
+ * 加它的原因：反馈回来的串口截图无法判断对方跑的是哪一版，
+ * 只能靠比对某行输出是否存在来倒推，每次迭代都要重来一遍。 */
+#ifndef BOARD_BUILD_ID
+#define BOARD_BUILD_ID 0u
 #endif
 
 /* C 侧把上面的裸数字转成指针用这个；汇编侧直接 li 即可。 */

@@ -1,5 +1,5 @@
 # 文件清单（给人看的；机器校验用 checksums.md5）
-# 生成时间 2026-08-24 16:22
+# 生成时间 2026-08-25 09:10
 #
 # 注意：w.bin (1.11 GB) 不在本仓库，也不在下面的清单里。
 #       它的大小与 md5 见 L2_L3_fullmodel/GET_WEIGHTS.md，请单独核对。
@@ -7,9 +7,9 @@
 # 校验：md5sum -c checksums.md5
 
         字节  文件
-          4344  L0_bringup/bringup_s2c.bin
-         64612  L0_bringup/bringup_s2c.diss
-         59048  L0_bringup/bringup_s2c.elf
+          4888  L0_bringup/bringup_s2c.bin
+         70218  L0_bringup/bringup_s2c.diss
+         60688  L0_bringup/bringup_s2c.elf
            998  L0_bringup/bringup_s2c.sym
          11653  L0_bringup/checklist.html
           6236  L0_bringup/checklist.md
@@ -197,9 +197,9 @@
           3549  L1_ame_vectors/golden_src/41_build_vectors.sh
          32090  L1_ame_vectors/index.json
            570  L2_L3_fullmodel/addresses.txt
-         16672  L2_L3_fullmodel/qwen3_s2c.bin
-        313042  L2_L3_fullmodel/qwen3_s2c.diss
-        186592  L2_L3_fullmodel/qwen3_s2c.elf
+         16744  L2_L3_fullmodel/qwen3_s2c.bin
+        313632  L2_L3_fullmodel/qwen3_s2c.diss
+        186816  L2_L3_fullmodel/qwen3_s2c.elf
           2742  L2_L3_fullmodel/qwen3_s2c.sym
        3409013  L2_L3_fullmodel/tok.bin
           8090  README.html
@@ -207,7 +207,7 @@
            570  addresses.txt
           4720  src/BUILD.md
           2845  src/src/Makefile
-         18648  src/src/bsp/board.h
+         19143  src/src/bsp/board.h
            599  src/src/bsp/libm_stub.c
           1337  src/src/bsp/qemu_virt.ld
           7223  src/src/bsp/start.S
@@ -219,7 +219,7 @@
            795  src/src/kernels_scalar.c
           2620  src/src/kernels_tiled.c
          10297  src/src/main.c
-         14696  src/src/main_baremetal.c
+         14756  src/src/main_baremetal.c
          11548  src/src/main_qemu.c
           2072  src/src/ops.h
           8451  src/src/ops_rvv.c
@@ -230,6 +230,6 @@
           3901  src/src/test_kernels.c
          13529  src/src/tokenizer.c
           3776  src/src/tokenizer.h
-         19787  src/tests/bringup.c
-         12045  src/tools/build_riscv.sh
+         20298  src/tests/bringup.c
+         12373  src/tools/build_riscv.sh
           4769  src/tools/env.sh

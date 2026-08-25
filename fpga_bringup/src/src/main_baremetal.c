@@ -221,6 +221,7 @@ static void check_layout(void) {
 void qwen3_main(void) {
     uart_init();                /* 必须早于第一次 putc_ */
     P("\n=== Qwen3-0.6B on RISC-V (bare-metal) ===\n");
+    P("build "); X(BOARD_BUILD_ID); P("   (0xMMDDhhmm)\n");
     P("kernel="); P(qwen3_kernel_name());
     P("  ops="); P(qwen3_ops_name()); P("\n");
 

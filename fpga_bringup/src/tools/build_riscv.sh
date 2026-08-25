@@ -43,6 +43,10 @@ board_def() {
     s2c)  BOARD_DEF="-DBOARD_S2C" ;;
     *)    echo "未知 BOARD=$BOARD（可选 qemu / s2c）" >&2; exit 1 ;;
     esac
+    # 版本标识：让串口第一行就能认出跑的是哪一版镜像。
+    # 用**十六进制**字面量 0xMMDDhhmm，打印出来直接读作 月日-时分。
+    # 不能写成十进制：08 开头会被 C 当八进制，而 08/09 是非法八进制。
+    BOARD_DEF="$BOARD_DEF -DBOARD_BUILD_ID=0x$(date +%m%d%H%M)"
 }
 
 # -nostdlib：不链 libc（newlib 的 IO 走 semihosting，user-mode QEMU 不认）
