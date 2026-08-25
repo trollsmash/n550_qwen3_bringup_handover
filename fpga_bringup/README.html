@@ -71,7 +71,7 @@ td code, th code { white-space:nowrap; }
 <body>
 <main>
 <h1>Qwen3-0.6B on RISC-V —— FPGA 上板交付包</h1>
-<blockquote><p>由 <code>tools/44_pack_fpga.sh</code> 生成，地址取自 <code>src/bsp/board.h</code>。 生成时间：2026-08-25 18:33</p></blockquote>
+<blockquote><p>由 <code>tools/44_pack_fpga.sh</code> 生成，地址取自 <code>src/bsp/board.h</code>。 生成时间：2026-08-25 19:02</p></blockquote>
 <p>板子：S2C，DDR <code>0x80000000</code>–<code>0xEFFFFFFF</code>， 串口 <code>0x20100000</code>（16550, 8N1），CPU/AME 40 MHz。</p>
 <hr>
 <h2>按这个顺序走，别跳级</h2>
@@ -90,7 +90,14 @@ td code, th code { white-space:nowrap; }
 <p>目录里的 <code>a.bin</code> / <code>b.bin</code> / <code>c_ref.bin</code> <strong>不用另外装</strong> —— 它们的内容已经在 <code>prog.bin</code> 里了， 单独留一份是为了排查时对照：后门读回输入区与 <code>a.bin</code> 比一下，就能分清 是后门没写进去还是 AME 算错了。详见 <code>README_FPGA.md</code>。</p>
 <p>12 个 case（8 个纯 AME + 4 个 RVV/AME 混合）。<strong>先跑完前 8 个纯 AME 的</strong>， 再碰混合的 —— 后者涉及 cache 与 AME 之间的数据交换，前者不依赖 cache 行为。</p>
 <h3>L2 / L3 —— 全模型</h3>
-<p>地址见 <code>addresses.txt</code>。<strong>L2 先不要加载 <code>tok.bin</code></strong>： 不加载时程序走回归模式，用固定的 4 个 token 跑一遍并与黄金数据自检， 不依赖分词器，出问题的范围更小。L2 过了再加 <code>tok.bin</code> 跑 L3。</p>
+<p>地址见 <code>addresses.txt</code>。<strong>加不加 <code>tok.bin</code> 决定程序走哪条路</strong>：</p>
+<div class='tablewrap'><table><thead><tr><th>加载了什么</th><th>程序做什么</th><th>用途</th></tr></thead><tbody><tr><td>只有 <code>w.bin</code></td><td><strong>回归模式</strong>：固定 4 个 token 跑一遍，与黄金数据自检</td><td>L2。不依赖分词器，出问题范围更小</td></tr><tr><td>再加 <code>tok.bin</code></td><td><strong>交互模式</strong>：串口输入中文，答案逐字吐回来</td><td>L3，也是 demo 形态</td></tr></tbody></table></div>
+<p><strong>L2 先不要加载 <code>tok.bin</code></strong>，过了再加。</p>
+<h4>交互模式怎么用</h4>
+<p>程序启动后停在 <code>&gt;</code> 提示符，直接在串口终端里打字：</p>
+<p>方括号里的点是 28 层的推进过程，每 5 层一个分隔符 —— 卡住时能一眼看出停在第几层。 末尾那行速度是<strong>当场算出来的</strong>，不是估算。</p>
+<p>几点提醒：</p>
+<ul><li><strong>串口终端要设成 UTF-8</strong>，否则中文回显是乱码。这与推理无关，纯粹是终端配置。</li><li><strong>权重要提前灌好</strong>。1.11 GB 走后门写进 DDR 不是几秒的事， 演示前让程序跑起来停在提示符，现场只做输入输出。</li><li>现场用输入法打中文有卡壳风险，<strong>预置问题按数字键直接触发</strong>，手输作为加分项。</li><li>每轮生成多少 token 由编译期的 <code>CHAT_MAX_GEN</code> 决定（默认 1）。 按实测速度调：一个 token 若要 10 秒，就压到 5~8 个说一句短话。</li><li>每轮都从头 prefill，不保留上下文 —— 每轮独立反倒让现场更可控。</li></ul>
 <hr>
 <h2>三条通用注意事项</h2>
 <p><strong>一、反复换镜像时先断电。</strong> 本核有 32 KB L1I，与 D-cache 不自动一致；host 经 PCIe 写镜像对 CPU 而言 就是&quot;动态加载指令&quot;。软复位时 I-cache 里可能还留着上一个镜像的指令， 现象是&quot;明明重新烧了，行为一点没变&quot;。<code>start.S</code> 里有 <code>fence.i</code> 兜底， 但遇到无法解释的&quot;改了没生效&quot;，<strong>先断电重来再怀疑代码</strong>。</p>

@@ -114,6 +114,61 @@ static void X(unsigned long v) {
     for (int s = 60; s >= 0; s -= 4) putc_("0123456789abcdef"[(v >> s) & 0xf]);
 }
 
+/* ==================== 串口输入 ====================
+ * 之前只有发送方向。做交互 demo 需要收方向：LSR 的 bit0 是 Data Ready，
+ * RBR 与 THR 同址（写是 THR，读是 RBR）。 */
+#define UART_RBR    0
+#define UART_LSR_DR 0x01
+
+static int uart_getc(void) {
+    for (;;) {
+#if BOARD_UART_32BIT
+        if (*BOARD_PTR(uint32_t, uart_addr(UART_LSR)) & UART_LSR_DR) break;
+#else
+        if (*BOARD_PTR(uint8_t, uart_addr(UART_LSR)) & UART_LSR_DR) break;
+#endif
+    }
+#if BOARD_UART_32BIT
+    return (int)(*BOARD_PTR(uint32_t, uart_addr(UART_RBR)) & 0xFF);
+#else
+    return (int)(*BOARD_PTR(uint8_t, uart_addr(UART_RBR)) & 0xFF);
+#endif
+}
+
+/* 读一行，带回显与退格。返回字节数（不含结尾 NUL）。
+ *
+ * 中文经终端发来的是 UTF-8 多字节序列。回显逐字节发回去没问题 ——
+ * 终端自己会把字节流重新组装成字符。但**退格必须整字删除**：
+ * 只退一个字节会在缓冲里留下半个字符，那对 tokenizer 是非法序列。
+ * UTF-8 的续字节高两位恒为 10，据此往回退到字符边界。 */
+static int uart_readline(char *buf, int cap) {
+    int n = 0;
+    for (;;) {
+        int c = uart_getc();
+        if (c == '\r' || c == '\n') { P("\n"); break; }
+        if (c == 8 || c == 127) {                   /* BS / DEL */
+            if (n > 0) {
+                int nb = 0;
+                do { n--; nb++; }
+                while (n > 0 && ((unsigned char)buf[n] & 0xC0) == 0x80);
+                /* 中文在终端占两列，ASCII 占一列，擦除宽度得跟着变 */
+                P(nb > 1 ? "\b\b  \b\b" : "\b \b");
+            }
+            continue;
+        }
+        if (c < 0x20) continue;                     /* 其余控制字符丢弃 */
+        if (n + 1 < cap) { buf[n++] = (char)c; putc_((char)c); }
+    }
+    buf[n] = 0;
+    return n;
+}
+
+static uint64_t rd_mcycle(void) {
+    uint64_t v;
+    __asm__ volatile("csrr %0, mcycle" : "=r"(v));
+    return v;
+}
+
 /* ==================== 模型 ==================== */
 static uint8_t g_scratch[QWEN3_SCRATCH_BYTES];
 
@@ -223,6 +278,94 @@ static void check_layout(void) {
     }
 }
 
+/* ==================== 交互式对话 ====================
+ * 演示形态：一个串口终端，输入中文回车，答案逐字冒出来。
+ * 不需要 host 侧程序，也不用 PCIe 后门参与 —— 现场只有一根串口线。
+ *
+ * 单轮对话：每次都从 pos0=0 重新 prefill，KV 缓存被新一轮覆盖。
+ * 多轮上下文对 demo 不是必需，而每轮独立反倒让现场更可控。 */
+
+/* 现场用输入法打中文有卡壳风险（终端编码、输入法切换），
+ * 预置几条按数字键直接触发，手输作为加分项而非唯一路径。 */
+static const char *g_presets[] = {
+    "你好，请介绍一下你自己",
+    "用一句话解释什么是 RISC-V",
+    "写一首关于秋天的短诗",
+};
+#define N_PRESET ((int)(sizeof g_presets / sizeof g_presets[0]))
+
+static char g_line[512];
+
+static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
+    unsigned long n = 0;
+    n = cat(g_chat_buf, n, CHAT_PREFIX);
+    n = cat(g_chat_buf, n, prompt);
+    n = cat(g_chat_buf, n, CHAT_MIDDLE);
+
+    int n_in = qwen3_tok_encode(tk, g_chat_buf, n, g_chat_ids, QWEN3_TOK_MAX);
+    if (n_in < 0 || n_in > QWEN3_MAX_BATCH) {
+        P("  [prompt 编码失败或超过单批上限，换短一点的问题]\n");
+        return;
+    }
+
+    uint64_t c0 = rd_mcycle();
+    qwen3_forward_batch(m, g_chat_ids, n_in, 0);
+    int next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
+    int got = 0;
+    for (int i = 0; i < CHAT_MAX_GEN; i++) {
+        if (next == QWEN3_EOS_TOKEN_ID_0 || next == QWEN3_EOS_TOKEN_ID_1) break;
+        size_t plen;
+        const uint8_t *piece = qwen3_tok_piece(tk, next, &plen);
+        for (size_t q = 0; q < plen; q++) putc_((char)piece[q]);   /* 流式 */
+        got++;
+        /* 最后一个 token 不必再前向：那一整遍 1.1 GB 权重算出的 logits
+         * 没有任何人会用到。 */
+        if (i + 1 >= CHAT_MAX_GEN) break;
+        qwen3_forward(m, next, n_in + i);
+        next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
+    }
+    uint64_t c1 = rd_mcycle();
+
+    /* 现场把速度算出来。这个数比幻灯片上任何数字都有说服力，
+     * 因为它是当场跑出来的。 */
+    P("\n\n  [prompt "); I(n_in); P(" token，生成 "); I(got); P(" token");
+#if BOARD_CPU_HZ
+    {
+        unsigned long ms = (unsigned long)((c1 - c0) / (BOARD_CPU_HZ / 1000));
+        P("，"); U(ms); P(" ms");
+        if (got > 0) { P("，"); U(ms / (unsigned long)got); P(" ms/token"); }
+    }
+#else
+    (void)c0; (void)c1;
+    P("（本平台 mcycle 非真实周期，未换算时间）");
+#endif
+    P("]\n");
+}
+
+static void chat_repl(qwen3_t *m, qwen3_tok_t *tk) {
+    P("\n============ 交互模式 ============\n");
+    P("直接输入中文问题后回车；输入数字选预置问题；q 退出\n");
+    for (int i = 0; i < N_PRESET; i++) {
+        P("  "); I(i + 1); P(") "); P(g_presets[i]); P("\n");
+    }
+    for (;;) {
+        P("\n> ");
+        int len = uart_readline(g_line, (int)sizeof g_line);
+        if (len == 0) continue;
+        if (len == 1 && (g_line[0] == 'q' || g_line[0] == 'Q')) break;
+
+        const char *prompt = g_line;
+        if (len == 1 && g_line[0] >= '1' && g_line[0] < '1' + N_PRESET) {
+            prompt = g_presets[g_line[0] - '1'];
+            P(prompt); P("\n");
+        }
+        P("\n");
+        chat_once(m, tk, prompt);
+    }
+    P("\n再见。\n");
+}
+
+
 void qwen3_main(void) {
     uart_init();                /* 必须早于第一次 putc_ */
     P("\n=== Qwen3-0.6B on RISC-V (bare-metal) ===\n");
@@ -266,31 +409,7 @@ void qwen3_main(void) {
 
     /* ================= 对话模式：中文进、中文出 ================= */
     if (have_tok) {
-        unsigned long n = 0;
-        n = cat(g_chat_buf, n, CHAT_PREFIX);
-        n = cat(g_chat_buf, n, DEMO_PROMPT);
-        n = cat(g_chat_buf, n, CHAT_MIDDLE);
-
-        int n_in = qwen3_tok_encode(&tk, g_chat_buf, n, g_chat_ids, QWEN3_TOK_MAX);
-        if (n_in < 0 || n_in > QWEN3_MAX_BATCH) die("prompt 编码失败或超过单批上限");
-
-        P("\n提问: " DEMO_PROMPT "\n");
-        P("(prompt "); I(n_in); P(" 个 token)\n回答: ");
-
-        qwen3_forward_batch(&m, g_chat_ids, n_in, 0);
-        int next = qwen3_argmax(m.s.logits, QWEN3_VOCAB_SIZE);
-        for (int i = 0; i < CHAT_MAX_GEN; i++) {
-            if (next == QWEN3_EOS_TOKEN_ID_0 || next == QWEN3_EOS_TOKEN_ID_1) break;
-            size_t plen;
-            const uint8_t *piece = qwen3_tok_piece(&tk, next, &plen);
-            for (size_t q = 0; q < plen; q++) putc_((char)piece[q]);  /* 流式输出 */
-            /* 最后一个 token 不必再前向：那一整遍 1.1 GB 权重算出来的
-             * logits 没有任何人会用到。之前的写法白算了一次。 */
-            if (i + 1 >= CHAT_MAX_GEN) break;
-            qwen3_forward(&m, next, n_in + i);
-            next = qwen3_argmax(m.s.logits, QWEN3_VOCAB_SIZE);
-        }
-        P("\n\n>>> DONE\n");
+        chat_repl(&m, &tk);
         halt(1);
     }
 
