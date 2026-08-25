@@ -1,5 +1,14 @@
 # AME 矩阵扩展 — RTL 验证向量包 v1
 
+> **⚠ 如果你是 FPGA 上板的同事：请看同目录的 `README_FPGA.md`。**
+>
+> 本文写给 **RTL 验证**，讲的是 testbench 与 `$readmemh`；上板流程不同，
+> 尤其**要用 `prog.bin` 而不是 `prog.hex`** —— 后者是给 Verilog `$readmemh`
+> 的文本格式，PCIe 后门写 DDR 用不了。
+>
+> 除运行方式外，其余内容（case 说明、数值判据、check.py 用法）两边通用。
+
+
 面向 **RTL 验证**。你不需要了解上层的 LLM 项目，也不需要装它的软件环境。
 
 每个 case 是一段**能自己跑起来的最小裸机程序**：算完把结果写到固定地址，

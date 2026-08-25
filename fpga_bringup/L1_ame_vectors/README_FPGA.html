@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>上板运行说明（FPGA）</title>
+<style>
+:root {
+  --bg:#ffffff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0;
+  --code-bg:#f6f8fa; --code-fg:#1f2328; --accent:#0969da;
+  --quote-bar:#d1d9e0; --th-bg:#f6f8fa; --mark:#fff8c5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#3d444d;
+    --code-bg:#161b22; --code-fg:#e6edf3; --accent:#4493f8;
+    --quote-bar:#3d444d; --th-bg:#161b22; --mark:#3f2e00;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; padding:2.5rem 1.25rem 6rem; background:var(--bg); color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",
+              "PingFang SC","Hiragino Sans GB",sans-serif;
+  font-size:16px; line-height:1.7;
+  -webkit-text-size-adjust:100%;
+}
+main { max-width:900px; margin:0 auto; }
+h1,h2,h3 { line-height:1.3; margin:2.2em 0 .8em; font-weight:600; }
+h1 { font-size:1.9rem; margin-top:0; padding-bottom:.35em; border-bottom:1px solid var(--line); }
+h2 { font-size:1.4rem; padding-bottom:.3em; border-bottom:1px solid var(--line); }
+h3 { font-size:1.15rem; }
+p { margin:.9em 0; }
+a { color:var(--accent); text-decoration:none; }
+a:hover { text-decoration:underline; }
+hr { border:0; border-top:1px solid var(--line); margin:2.5em 0; }
+strong { font-weight:650; }
+code {
+  background:var(--code-bg); color:var(--code-fg); border-radius:5px;
+  padding:.15em .38em; font-size:.88em;
+  font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+pre {
+  background:var(--code-bg); border:1px solid var(--line); border-radius:8px;
+  padding:.9rem 1rem; overflow-x:auto; margin:1.1em 0; line-height:1.55;
+}
+pre code { background:none; padding:0; font-size:.85rem; }
+blockquote {
+  margin:1.2em 0; padding:.15em 1.1em; color:var(--muted);
+  border-left:4px solid var(--quote-bar);
+}
+blockquote p { margin:.6em 0; }
+ul,ol { margin:.9em 0; padding-left:1.6em; }
+li { margin:.4em 0; }
+li > p { margin:.35em 0; }
+/* 宽表格自己横向滚动，页面本身绝不横向滚动 */
+.tablewrap { overflow-x:auto; margin:1.3em 0; }
+table { border-collapse:collapse; width:100%; font-size:.93rem; }
+th,td { border:1px solid var(--line); padding:.5em .75em; text-align:left; vertical-align:top; }
+th { background:var(--th-bg); font-weight:650; white-space:nowrap; }
+td code, th code { white-space:nowrap; }
+.meta { color:var(--muted); font-size:.85rem; margin-top:3rem;
+        padding-top:1rem; border-top:1px solid var(--line); }
+@media print {
+  body { padding:0; font-size:11pt; }
+  pre,.tablewrap { break-inside:avoid; }
+  h1,h2,h3 { break-after:avoid; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>上板运行说明（FPGA）</h1>
+<p>本目录的 <code>README.md</code> 是写给 <strong>RTL 验证</strong>的，讲 testbench 与 <code>$readmemh</code>。 在 FPGA 上跑这些 case 用不着那一套，流程与 L0 bringup 完全相同：</p>
+<ol><li>PCIe 后门写 <code>cases/&lt;case&gt;/prog.bin</code> -&gt; <code>0x8000_0000</code> <strong>用 .bin，不是 .hex</strong> —— 后者是给 Verilog <code>$readmemh</code> 的文本格式。</li><li>放开复位</li><li>轮询 <code>0x800C_0000</code>，等它变成 <code>0x600D600D</code></li><li>读 <code>0x800C_0004</code>：<code>0x50415353</code>(PASS) / <code>0x4641494C</code>(FAIL)</li><li>失败时 <code>0x800C_0008</code> 是首个不符元素的下标，<code>0x800A_0000</code> 起是结果矩阵 C</li></ol>
+<p><code>prog.bin</code> 是自包含的完整内存镜像，不需要额外加载权重或分词器，也不用串口。</p>
+<h2>目录里那些 .bin 要不要一起装？——不用</h2>
+<p><code>a.bin</code> / <code>b.bin</code> / <code>c_ref.bin</code> 的内容<strong>已经逐字节嵌在 <code>prog.bin</code> 里</strong>了， 在各自的地址上（见 <code>meta.json</code> 的 <code>segments</code>）。<strong>只装 <code>prog.bin</code> 这一个文件。</strong></p>
+<p>它们是同一份数据的独立副本，留着是为了<strong>区分「装载错了」和「算错了」</strong>：</p>
+<div class='tablewrap'><table><thead><tr><th>想确认什么</th><th>怎么做</th></tr></thead><tbody><tr><td>输入数据是否真的写进去了</td><td>后门读 <code>segments.a</code> 起 8192 字节，与 <code>a.bin</code> 比对；<code>b</code> 同理</td></tr><tr><td>结果是否正确</td><td>后门读 <code>segments.c</code>，与 <code>c_ref.bin</code> 比对（程序自检也在做这件事）</td></tr><tr><td>误差是否在容限内</td><td><code>c_peak.bin</code> 是各元素累加过程的峰值，判据要用它归一化，见 <code>check.py</code></td></tr></tbody></table></div>
+<p>case 失败时先做第一行：相同说明输入到位、问题在计算；不同说明是后门写入本身 出了问题，那跟 AME 没关系。这一步能省掉一整轮猜测。</p>
+<p><code>.hex</code> 是各 <code>.bin</code> 的文本版（每行一个 32 位小端字），只给 Verilog <code>$readmemh</code> 用， 上板一律用 <code>.bin</code>。</p>
+<p>什么时候需要跑它：L0 的 step5 只验了 1x1x32 全 1 这一种最简情形。 若 L0 过了但全模型数值不对，用这 12 个 case 定位是哪一类情况出错 （partial M/N/K、多 k 块累加、RVV 与 AME 混合等）。 <strong>先跑完前 8 个纯 AME 的</strong>，再碰混合的 —— 后者涉及 cache 与 AME 的数据交换。</p>
+<p>其余内容（case 说明、数值判据、check.py 用法）两边通用，见 <code>README.md</code>。</p>
+<p class="meta">由 tools/42_md2html.py 从 README_FPGA.md 生成。
+内容以 Markdown 源文件为准；改了源文件请重新生成本页。</p>
+</main>
+</body>
+</html>
