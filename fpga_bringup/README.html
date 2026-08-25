@@ -71,7 +71,7 @@ td code, th code { white-space:nowrap; }
 <body>
 <main>
 <h1>Qwen3-0.6B on RISC-V —— FPGA 上板交付包</h1>
-<blockquote><p>由 <code>tools/44_pack_fpga.sh</code> 生成，地址取自 <code>src/bsp/board.h</code>。 生成时间：2026-08-25 09:09</p></blockquote>
+<blockquote><p>由 <code>tools/44_pack_fpga.sh</code> 生成，地址取自 <code>src/bsp/board.h</code>。 生成时间：2026-08-25 16:19</p></blockquote>
 <p>板子：S2C，DDR <code>0x80000000</code>–<code>0xEFFFFFFF</code>， 串口 <code>0x20100000</code>（16550, 8N1），CPU/AME 40 MHz。</p>
 <hr>
 <h2>按这个顺序走，别跳级</h2>
@@ -83,8 +83,12 @@ td code, th code { white-space:nowrap; }
 <p><strong>判成败只看一个地址</strong>：<code>0x87F0001C</code>（FAILMASK），为 0 才算过。 不要只看 STATUS——软失败后程序会继续跑，STATUS 会被后续阶段覆盖。</p>
 <p>L0 第六步会回填性能采样数据（<code>CYCLES</code> / <code>ITERS</code>），<strong>把这两个数发回软件侧</strong>： 它们能把每 token 耗时从&quot;0.2 秒到 3 秒&quot;这个跨一个数量级的估算收敛成确定值。</p>
 <h3>L1 —— AME 数值</h3>
-<p><code>L1_ame_vectors/</code> 是给 RTL 验证同事的独立交付包，这里整份带上， 上板时若 AME 数值出问题，手边就有能立刻复现的最小激励。</p>
-<p>看该目录下的 <code>README.md</code>。12 个 case（8 个纯 AME + 4 个 RVV/AME 混合）， 程序自带比对，把 <code>cases/001*/prog.hex</code> 装到 <code>0x80000000</code> 起即可。 先跑完前 8 个纯 AME 的，再碰混合的 —— 前者不依赖 cache 行为。</p>
+<p><code>L1_ame_vectors/</code> 原本是给 RTL 验证同事的独立交付包，<strong>在板上同样能跑</strong>， 所以整份带上：L0 的 step5 只验了 1x1x32 全 1 这一种最简情形， 若全模型数值不对，需要更细的激励来定位是哪一类情况出错。</p>
+<p>⚠ 该目录里的 <code>README.md</code> 是 <strong>RTL 视角</strong>（讲 testbench 与 <code>$readmemh</code>）。 上板请按下表操作，并且<strong>用 <code>prog.bin</code> 而不是 <code>prog.hex</code></strong> —— 后者是给 Verilog <code>$readmemh</code> 的文本格式，后门写 DDR 用不了。 同一份说明也放了一份在 <code>L1_ame_vectors/README_FPGA.md</code>。</p>
+<div class='tablewrap'><table><thead><tr><th>步骤</th><th>操作</th></tr></thead><tbody><tr><td>1</td><td>PCIe 后门写 <code>cases/&lt;case&gt;/prog.bin</code> -&gt; <code>0x8000_0000</code></td></tr><tr><td>2</td><td>放开复位</td></tr><tr><td>3</td><td>轮询 <code>0x800C_0000</code>，等它变成 <code>0x600D600D</code>（计算完成）</td></tr><tr><td>4</td><td>读 <code>0x800C_0004</code>：<code>0x50415353</code>(PASS) / <code>0x4641494C</code>(FAIL)</td></tr><tr><td>5</td><td>失败时读 <code>0x800C_0008</code> 取首个不符元素的下标；<code>0x800A_0000</code> 起是结果矩阵 C</td></tr></tbody></table></div>
+<p><code>prog.bin</code> 是从 <code>0x8000_0000</code> 起的完整连续镜像，代码、A、B、C、期望值全在里面， 一次装载就位 —— 不需要额外加载权重或分词器，也不用串口。流程与 L0 完全相同。</p>
+<p>目录里的 <code>a.bin</code> / <code>b.bin</code> / <code>c_ref.bin</code> <strong>不用另外装</strong> —— 它们的内容已经在 <code>prog.bin</code> 里了， 单独留一份是为了排查时对照：后门读回输入区与 <code>a.bin</code> 比一下，就能分清 是后门没写进去还是 AME 算错了。详见 <code>README_FPGA.md</code>。</p>
+<p>12 个 case（8 个纯 AME + 4 个 RVV/AME 混合）。<strong>先跑完前 8 个纯 AME 的</strong>， 再碰混合的 —— 后者涉及 cache 与 AME 之间的数据交换，前者不依赖 cache 行为。</p>
 <h3>L2 / L3 —— 全模型</h3>
 <p>地址见 <code>addresses.txt</code>。<strong>L2 先不要加载 <code>tok.bin</code></strong>： 不加载时程序走回归模式，用固定的 4 个 token 跑一遍并与黄金数据自检， 不依赖分词器，出问题的范围更小。L2 过了再加 <code>tok.bin</code> 跑 L3。</p>
 <hr>

@@ -49,12 +49,31 @@ typedef struct {
     const uint8_t *base;
     size_t         size;
     size_t         pos;
+    /* 张量对齐粒度取自 header 而非编译期常量：tile-major 布局下它是 4096
+     * （让每个 8 KB 的 tile 都落在 4 KB 边界上，AXI burst 才不会被切三段），
+     * 行优先下仍是 128。写死常量会让所有张量偏移算错。 */
+    size_t         align;
     int            err;
 } cursor_t;
 
+/* 只认行优先的 kernel，两个入口本就等价。做成弱符号让 AME kernel 覆盖。 */
+__attribute__((weak))
+void qwen3_gemm_row(float *c, const float *a, const uint16_t *b,
+                    int M, int K, int N) {
+    qwen3_gemm(c, a, b, M, K, N);
+}
+
+/* 默认实现：只认行优先。做成弱符号，好让认识其它布局的 kernel 覆盖它 ——
+ * 目前只有 kernels_ame.c 提供强符号。 */
+__attribute__((weak))
+int qwen3_set_weight_layout(int layout, int tile_n, int tile_k) {
+    (void)tile_n; (void)tile_k;
+    return layout == QW3M_LAYOUT_ROW ? 0 : -1;
+}
+
 static const uint16_t *cur_take(cursor_t *c, size_t n_elem) {
     if (c->err) return 0;
-    size_t p = (c->pos + QW3M_ALIGN - 1) & ~((size_t)QW3M_ALIGN - 1);
+    size_t p = (c->pos + c->align - 1) & ~(c->align - 1);
     size_t nbytes = n_elem * sizeof(uint16_t);
     if (p + nbytes > c->size) {
         c->err = QWEN3_ERR_SIZE;
@@ -84,7 +103,16 @@ int qwen3_init(qwen3_t *m, const void *blob, size_t blob_size,
     if (rd_i32(b + 24) != QWEN3_N_KV_HEADS)        return QWEN3_ERR_SHAPE;
     if (rd_i32(b + 28) != QWEN3_HEAD_DIM)          return QWEN3_ERR_SHAPE;
     if (rd_i32(b + 32) != QWEN3_VOCAB_SIZE)        return QWEN3_ERR_SHAPE;
-    if (rd_i32(b + 72) != QW3M_ALIGN)              return QWEN3_ERR_SHAPE;
+    /* 对齐粒度不再要求等于编译期常量：tile-major 用 4096，行优先用 128。
+     * 只校验它是 2 的幂且不小于默认值，具体值交给 cursor 使用。 */
+    const int align = rd_i32(b + 72);
+    if (align < QW3M_ALIGN || (align & (align - 1)) != 0)
+        return QWEN3_ERR_SHAPE;
+
+    /* 布局必须让当前 kernel 认得，否则算出的每个数都取自错误的位置。 */
+    const int layout = rd_i32(b + 76);
+    if (qwen3_set_weight_layout(layout, rd_i32(b + 80), rd_i32(b + 84)) != 0)
+        return QWEN3_ERR_LAYOUT;
 
     /* 浮点超参也校验一下，防止用了别的模型导出的同版本文件。 */
     if (rd_f32(b + 48) != QWEN3_ROPE_THETA)        return QWEN3_ERR_SHAPE;
@@ -93,7 +121,7 @@ int qwen3_init(qwen3_t *m, const void *blob, size_t blob_size,
     m->n_layers = QWEN3_N_LAYERS;
 
     /* ---- 切权重指针 ---- */
-    cursor_t c = { b, blob_size, (size_t)rd_i32(b + 68), 0 };
+    cursor_t c = { b, blob_size, (size_t)rd_i32(b + 68), (size_t)align, 0 };
 
     m->w.embed_tokens = cur_take(&c, (size_t)QWEN3_VOCAB_SIZE * QWEN3_HIDDEN_SIZE);
     for (int l = 0; l < QWEN3_N_LAYERS; l++) {
@@ -161,6 +189,9 @@ const char *qwen3_strerror(int err) {
     case QWEN3_ERR_SHAPE:    return "形状/超参与编译期常量不符 (权重文件与 qwen3_config.h 不匹配)";
     case QWEN3_ERR_SIZE:     return "文件长度不符";
     case QWEN3_ERR_OOM:      return "scratch 空间不足";
+    case QWEN3_ERR_LAYOUT:   return "权重布局本 kernel 不支持 "
+                                    "(tile-major 的权重只能配 AME kernel，"
+                                    "行优先的权重请用 --layout row 重新导出)";
     default:                 return "unknown";
     }
 }
@@ -375,7 +406,8 @@ void qwen3_forward_batch(qwen3_t *m, const int *tokens, int n_token, int pos0) {
      *   （N=151936），算全部 NT 行纯属浪费。
      *   代价是 dump 出的 logits 只有 1 行，而黄金数据是 NT 行 ——
      *   tools/04_compare.py 对此做了特殊处理（取黄金数据的最后一行比对）。 */
-    qwen3_gemm(s->logits, s->x + (size_t)(NT - 1) * H, m->w.embed_tokens,
+    /* ★ 必须走行优先入口：embed_tokens 从不重排（见 kernels.h 的说明）。 */
+    qwen3_gemm_row(s->logits, s->x + (size_t)(NT - 1) * H, m->w.embed_tokens,
                1, (int)H, QWEN3_VOCAB_SIZE);
     EMIT(m, -1, "logits", s->logits, QWEN3_VOCAB_SIZE);
 }

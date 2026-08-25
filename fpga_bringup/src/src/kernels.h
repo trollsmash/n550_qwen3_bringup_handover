@@ -56,6 +56,38 @@
 void qwen3_gemm(float *c, const float *a, const uint16_t *b,
                 int M, int K, int N);
 
+/* ── 权重存储布局 ──────────────────────────────────────────────
+ * 取值与权重文件 header 偏移 76 的字段一致，由 tools/02_export_weights.py 写入。
+ *
+ * ROW  : [N,K] 行优先，PyTorch 原始布局。GEMM 装载一个 tile 时逐行取 mtilek 个
+ *        元素，行间跨度 K*2 字节 —— 读 64 B 就要跳过 2 KB，AXI 侧无从合并。
+ * TILE : 每个 AME_TILE_N x AME_TILE_K 子块被搬成连续的一段。行间跨度变成
+ *        mtilek*2 = 64 B，整个 tile 是连续的 8 KB，硬件才可能发长 burst。
+ *        只有 AME kernel 认识这种布局。 */
+#define QW3M_LAYOUT_ROW   0
+#define QW3M_LAYOUT_TILE  1
+
+/* 权重**按行优先存放**的 GEMM。
+ *
+ * tile-major 布局下并非所有权重都被重排：embed_tokens 要按 token id 整行查表，
+ * 而本模型 tie_word_embeddings=1，lm_head 与它共享同一块权重，重排了查表就错，
+ * 所以那一块始终是行优先的。用 qwen3_gemm 去算它会按 tile 布局寻址，
+ * 取到的每个数都来自错误的位置 —— 没有异常，只有一堆看似合理的 logits。
+ *
+ * 因此：**权重是否被重排，由调用方决定用哪个入口**，而不是由全局状态决定。
+ * 行优先 kernel 下两者完全等价。 */
+void qwen3_gemm_row(float *c, const float *a, const uint16_t *b,
+                    int M, int K, int N);
+
+/* 告知 kernel 权重按哪种布局存放，由 qwen3_init 在解析 header 后调用一次。
+ *
+ * 返回非 0 表示本 kernel 不支持该布局，调用方**必须**据此失败：
+ * 布局不匹配时 GEMM 照样算得出结果，只是每个数都取自错误的位置 ——
+ * 没有异常、没有崩溃，只有一堆看似合理的垃圾，是最难查的一类错误。
+ *
+ * 默认实现（qwen3.c 里的弱符号）只接受 ROW；kernels_ame.c 用强符号覆盖它。 */
+int qwen3_set_weight_layout(int layout, int tile_n, int tile_k);
+
 /* 当前链接进来的 kernel 实现的名字，用于日志与测试报告。 */
 const char *qwen3_kernel_name(void);
 

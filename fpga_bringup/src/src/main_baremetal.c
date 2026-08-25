@@ -157,7 +157,12 @@ static uint32_t rd32(const uint8_t *p) {
  * 张量区按 QW3M_ALIGN 对齐依次排列，末尾无填充，故总长即最后一个张量的终点。
  * 这里直接用导出时的实际值做交叉校验即可 —— qwen3_init 内部会核对 header
  * 与编译期常量是否一致，用错文件会立刻报错而不是算出垃圾。 */
+/* 构建脚本按权重文件的实际大小注入 -DWEIGHTS_SIZE。
+ * 不同布局的文件大小不同（tile-major 因 4 KB 对齐会多出约 326 KB），
+ * 写死一个数就会在换布局时触发 QWEN3_ERR_SIZE。下面只是兜底默认值。 */
+#ifndef WEIGHTS_SIZE
 #define WEIGHTS_SIZE 1192100096UL
+#endif
 
 /* 覆盖 qwen3.c 里的弱符号，把 28 层的推进过程吐到串口。
  *

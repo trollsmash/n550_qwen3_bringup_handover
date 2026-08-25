@@ -90,14 +90,25 @@ build() {
     echo "   未定义符号: ${und:-无}"
 }
 
+# 权重文件与其大小 —— 编译期就要用到（-DWEIGHTS_SIZE），所以在分支之前算好。
+# WEIGHTS 可指向 tile-major 版；两种布局的文件大小不同，写死会让
+# qwen3_init 在最后几个张量上报 QWEN3_ERR_SIZE。
+WSRC="${WEIGHTS:-golden/qwen3-0.6b-bf16.bin}"
+WSIZE_DEF=""
+[ -f "$WSRC" ] && WSIZE_DEF="-DWEIGHTS_SIZE=$(stat -c%s "$WSRC")UL"
+
 case "${1:-build}" in
 build) build ;;
 run)
     build
     STEPS="${2:-5}"
     # 权重放原生盘：跨 /mnt/c 读 1.1GB 走 9p，首次加载明显更慢
-    W="$OUT/w.bin"
-    [ -f "$W" ] || cp golden/qwen3-0.6b-bf16.bin "$W"
+    W="$OUT/w-$(basename "$WSRC" .bin).bin"
+    [ -f "$W" ] || cp "$WSRC" "$W"
+    # 打包脚本按固定名 w.bin 取权重。这里让它指向本次构建实际用的那一份，
+    # 免得两处各自拼文件名而失同步 —— 那种错的表现是打包进了上一次布局的
+    # 权重，镜像与权重对不上，却不会有任何提示。
+    ln -sf "$(basename "$W")" "$OUT/w.bin"
     echo "== QEMU 运行 ($STEPS 步) =="
     ( cd "$OUT" && time "$QEMU_RISCV64" -cpu "$QEMU_CPU_FULL" ./qwen3.elf w.bin "$STEPS" )
     ;;
@@ -111,7 +122,7 @@ baremetal)
     rm -f "$OUT/qwen3_bm.elf"
     # -Isrc 是为了让 start.S 能 #include "board.h"
     # shellcheck disable=SC2086
-    ${CROSS}gcc $RISCV_CFLAGS -Isrc $BOARD_DEF -ffreestanding -nostdlib -nostartfiles \
+    ${CROSS}gcc $RISCV_CFLAGS -Isrc $BOARD_DEF $WSIZE_DEF -ffreestanding -nostdlib -nostartfiles \
         -T src/bsp/qemu_virt.ld src/bsp/start.S \
         src/qwen3.c src/tokenizer.c src/kernels_${KERNEL}.c src/ops_${OPS}.c \
         src/main_baremetal.c $BSP \
@@ -122,8 +133,12 @@ baremetal)
         "$(echo "$(stat -c%s "$OUT/qwen3_bm.elf")/1024" | bc -l)"
     printf "   %s  (反汇编，按 mepc 定位用)\n" "$OUT/qwen3_bm.diss"
 
-    W="$OUT/w.bin"
-    [ -f "$W" ] || cp golden/qwen3-0.6b-bf16.bin "$W"
+    W="$OUT/w-$(basename "$WSRC" .bin).bin"
+    [ -f "$W" ] || cp "$WSRC" "$W"
+    # 打包脚本按固定名 w.bin 取权重。这里让它指向本次构建实际用的那一份，
+    # 免得两处各自拼文件名而失同步 —— 那种错的表现是打包进了上一次布局的
+    # 权重，镜像与权重对不上，却不会有任何提示。
+    ln -sf "$(basename "$W")" "$OUT/w.bin"
     T="$OUT/tok.bin"
     [ -f "$T" ] || cp golden/tokenizer.bin "$T"
 
@@ -181,7 +196,7 @@ bringup)
     # 复用 src/bsp/start.S —— 顺带验证 gp/栈/BSS/mstatus/trap handler，
     # 而它们正是后面跑全模型要用的同一份启动代码。
     # shellcheck disable=SC2086
-    ${CROSS}gcc $RISCV_CFLAGS -Isrc $BOARD_DEF -ffreestanding -nostdlib -nostartfiles \
+    ${CROSS}gcc $RISCV_CFLAGS -Isrc $BOARD_DEF $WSIZE_DEF -ffreestanding -nostdlib -nostartfiles \
         -T src/bsp/qemu_virt.ld src/bsp/start.S tests/bringup.c \
         src/bsp/string_min.c -o "$ELF" 2>&1 \
         | grep -viE "LOAD segment with RWX" || true

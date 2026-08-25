@@ -1,6 +1,6 @@
 # 源码与重新编译
 
-232K，包含 L0/L2/L3 全部源码。改完能自己编出镜像，
+240K，包含 L0/L2/L3 全部源码。改完能自己编出镜像，
 不必回头找软件侧。
 
 ## 目录
@@ -27,6 +27,31 @@ tools/env.sh             工具链与 ISA 串
 source tools/env.sh                                   # 先改里面的工具链路径
 BOARD=s2c tools/build_riscv.sh bringup                # L0  -> bringup_s2c.bin
 KERNEL=ame OPS=rvv BOARD=s2c tools/build_riscv.sh baremetal   # L2/L3 -> qwen3_s2c.bin
+```
+
+## 可选：tile-major 权重布局（访存优化，需 RTL 配合）
+
+AME 装载一个 tile 要读 128 行、每行 32 个 BF16 = 64 字节。权重按 PyTorch 原始的
+ 行优先存放时，**行间跨度是 K x 2 = 2048 字节**（down_proj 是 6144）——
+读 64 B 就要跳过 2 KB，AXI 侧只能发 128 个单拍事务，无从合并。
+
+把权重按 tile 重排后，行间跨度变成 **64 字节**，整个 tile 是连续的 8 KB：
+
+```bash
+python tools/02_export_weights.py --layout tile   # -> golden/qwen3-0.6b-bf16-tile.bin
+KERNEL=ame OPS=rvv BOARD=s2c WEIGHTS=golden/qwen3-0.6b-bf16-tile.bin \n    tools/build_riscv.sh baremetal
+```
+
+**⚠ 只有当 RTL 支持「stride 等于行宽时合并成 burst」，这个布局才有收益**；
+否则访存模式虽然连续，硬件仍按单拍发，性能与行优先一样。两边都到位才有效果。
+
+两种布局的权重**不能混用**：布局标记在文件 header 偏移 76， 会校验，
+不匹配时立刻报错而不是算出垃圾。tile 版文件大约 326 KB（张量对齐从 128 B 提到
+4096 B，好让每个 8 KB 的 tile 落在 4 KB 边界上 —— AXI burst 不得跨 4 KB 边界，
+对齐后正好切成两段而非三段）。
+
+数值上两种布局完全等价，已在 QEMU 上用带黄金数据的回归模式验证过。
+
 ```
 
 每次构建除了 `.bin` 还会产出三个文件，烧录只用 `.bin`，另外三个留着排障：

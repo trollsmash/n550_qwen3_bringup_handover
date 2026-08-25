@@ -60,7 +60,38 @@ static inline void set_tile(long m, long n, long k) {
     __asm__ volatile("csrw 0x805, %0" :: "r"(k));
 }
 
-void qwen3_gemm(float *c, const float *a, const uint16_t *b,
+/* 权重是否为 tile-major。由 qwen3_init 解析 header 后设定。 */
+static int g_b_tiled;
+
+/* 覆盖 qwen3.c 里的弱符号：本 kernel 两种布局都认。 */
+int qwen3_set_weight_layout(int layout, int tile_n, int tile_k) {
+    if (layout == QW3M_LAYOUT_ROW) { g_b_tiled = 0; return 0; }
+    if (layout != QW3M_LAYOUT_TILE) return -1;
+    /* tile 尺寸必须与本 kernel 编译时用的一致，否则地址算出来是错位的。 */
+    if (tile_n != AME_TILE_N || tile_k != AME_TILE_K) return -1;
+    /* tile-major 的地址计算假设 N、K 都能整除 tile 尺寸 —— 导出脚本已保证，
+     * 这里把本模型出现的所有 GEMM 维度一次性复核，省得每次调用都查。
+     * 不整除时最后一块 tile 不满，块的起始偏移就会全部错开。 */
+    const int ns[] = { QWEN3_Q_DIM, QWEN3_KV_DIM,
+                       QWEN3_HIDDEN_SIZE, QWEN3_INTERMEDIATE_SIZE };
+    const int ks[] = { QWEN3_HIDDEN_SIZE, QWEN3_Q_DIM, QWEN3_INTERMEDIATE_SIZE };
+    for (unsigned i = 0; i < sizeof ns / sizeof ns[0]; i++)
+        if (ns[i] % AME_TILE_N) return -1;
+    for (unsigned i = 0; i < sizeof ks / sizeof ks[0]; i++)
+        if (ks[i] % AME_TILE_K) return -1;
+    g_b_tiled = 1;
+    return 0;
+}
+
+/* tile-major 下 (n0, k0) 号 tile 的元素偏移。
+ * tile 按 n0 在外、k0 在内排列 —— 与下面的循环顺序一致，
+ * 使相邻的 k0 迭代读到相邻的 tile，DDR 侧也就有了行局部性。 */
+static inline size_t b_tile_off(int n0, int k0, int K) {
+    return ((size_t)(n0 / AME_TILE_N) * ((size_t)K / AME_TILE_K)
+            + (size_t)(k0 / AME_TILE_K)) * (AME_TILE_N * AME_TILE_K);
+}
+
+static void gemm_impl(int tiled, float *c, const float *a, const uint16_t *b,
                 int M, int K, int N) {
     /* 激活 FP32 -> BF16。AME 的两个源操作数都必须是 BF16。 */
     const size_t n_a = (size_t)M * (size_t)K;
@@ -87,7 +118,10 @@ void qwen3_gemm(float *c, const float *a, const uint16_t *b,
     BOARD_FENCE();
 
     const long a_stride = (long)K * 2;      /* BF16 行字节 stride */
-    const long b_stride = (long)K * 2;
+    /* 行优先要跨过整行 K 个元素才到 tile 的下一行（读 64 B 跳 2 KB）；
+     * tile-major 下一行紧接着上一行，跨度就是 tile 的行宽 64 B，
+     * 整个 tile 是连续的 8 KB —— AXI 侧这才有合并成长 burst 的可能。 */
+    const long b_stride = tiled ? (long)AME_TILE_K * 2 : (long)K * 2;
     const long c_stride = (long)N * 4;      /* FP32 */
 
     for (int m0 = 0; m0 < M; m0 += AME_TILE_M) {
@@ -104,7 +138,9 @@ void qwen3_gemm(float *c, const float *a, const uint16_t *b,
                 set_tile(mm, nn, kk);
 
                 const uint16_t *ap = g_abuf + (size_t)m0 * K + k0;
-                const uint16_t *bp = b      + (size_t)n0 * K + k0;
+                const uint16_t *bp = tiled
+                        ? b + b_tile_off(n0, k0, K)
+                        : b + (size_t)n0 * K + k0;
 
                 /* A: mtilem×mtilek 左矩阵     B: mtilen×mtilek 右矩阵 */
                 __asm__ volatile("mlae16 tr0,(%0),%1"
@@ -138,6 +174,20 @@ void qwen3_gemm(float *c, const float *a, const uint16_t *b,
     BOARD_FENCE();
     BOARD_DCACHE_INVAL(c, (size_t)M * (size_t)N * sizeof *c);
     BOARD_FENCE();
+}
+
+/* 绝大多数 GEMM 走这里：权重按什么布局存放，由 qwen3_set_weight_layout 决定。 */
+void qwen3_gemm(float *c, const float *a, const uint16_t *b,
+                int M, int K, int N) {
+    gemm_impl(g_b_tiled, c, a, b, M, K, N);
+}
+
+/* 权重确定是行优先的那几处走这里 —— 目前只有 lm_head，它复用 embed_tokens，
+ * 而 embed_tokens 从不重排（要按 token id 整行查表）。
+ * 这类调用不能受全局布局影响，否则每个数都取自错误的位置。 */
+void qwen3_gemm_row(float *c, const float *a, const uint16_t *b,
+                    int M, int K, int N) {
+    gemm_impl(0, c, a, b, M, K, N);
 }
 
 const char *qwen3_kernel_name(void) { return "ame"; }

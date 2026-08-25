@@ -153,6 +153,9 @@ enum {
     QWEN3_ERR_SHAPE = -4,
     QWEN3_ERR_SIZE = -5,
     QWEN3_ERR_OOM = -6,
+    /* 权重文件的布局本 kernel 不认识（例如把 tile-major 的权重
+     * 喂给只会按行优先访问的 scalar/RVV kernel）。 */
+    QWEN3_ERR_LAYOUT = -7,
 };
 
 /* 从已载入内存的权重 blob 建立权重指针表。
