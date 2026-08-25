@@ -72,8 +72,20 @@ td code, th code { white-space:nowrap; }
 <main>
 <h1>上板运行说明（FPGA）</h1>
 <p>本目录的 <code>README.md</code> 是写给 <strong>RTL 验证</strong>的，讲 testbench 与 <code>$readmemh</code>。 在 FPGA 上跑这些 case 用不着那一套，流程与 L0 bringup 完全相同：</p>
-<ol><li>PCIe 后门写 <code>cases/&lt;case&gt;/prog.bin</code> -&gt; <code>0x8000_0000</code> <strong>用 .bin，不是 .hex</strong> —— 后者是给 Verilog <code>$readmemh</code> 的文本格式。</li><li>放开复位</li><li>轮询 <code>0x800C_0000</code>，等它变成 <code>0x600D600D</code></li><li>读 <code>0x800C_0004</code>：<code>0x50415353</code>(PASS) / <code>0x4641494C</code>(FAIL)</li><li>失败时 <code>0x800C_0008</code> 是首个不符元素的下标，<code>0x800A_0000</code> 起是结果矩阵 C</li></ol>
-<p><code>prog.bin</code> 是自包含的完整内存镜像，不需要额外加载权重或分词器，也不用串口。</p>
+<ol><li>PCIe 后门写 <code>cases/&lt;case&gt;/prog_fpga.bin</code> -&gt; <code>0x8000_0000</code> <strong>用 <code>prog_fpga.bin</code></strong>（带串口输出的 FPGA 版，见下节）， <strong>也不要用 .hex</strong> —— 那是给 Verilog <code>$readmemh</code> 的文本格式。</li><li>放开复位</li><li>轮询 <code>0x800C_0000</code>，等它变成 <code>0x600D600D</code></li><li>读 <code>0x800C_0004</code>：<code>0x50415353</code>(PASS) / <code>0x4641494C</code>(FAIL)</li><li>失败时 <code>0x800C_0008</code> 是首个不符元素的下标，<code>0x800A_0000</code> 起是结果矩阵 C</li></ol>
+<p><code>prog_fpga.bin</code> 是自包含的完整内存镜像，不需要额外加载权重或分词器。</p>
+<h2>两份镜像的区别</h2>
+<div class='tablewrap'><table><thead><tr><th>文件</th><th>给谁</th><th>区别</th></tr></thead><tbody><tr><td><code>prog.bin</code></td><td>RTL 验证</td><td>结果只写内存，完全不碰串口</td></tr><tr><td><strong><code>prog_fpga.bin</code></strong></td><td><strong>FPGA 上板</strong></td><td>同样的计算，额外把结果打到串口</td></tr></tbody></table></div>
+<p>两者装载地址与流程完全相同，只差一个串口输出。跑完串口直接给出：</p>
+<pre><code>=== case 001 bf16_full_tile  M=128 N=128 K=32 ===
+RESULT: PASS</code></pre>
+<p>失败时连出错元素一起打出来：</p>
+<pre><code>RESULT: FAIL  idx=00000003  got=4351eec8  exp=4351eec7</code></pre>
+<p><code>got</code>/<code>exp</code> 是 FP32 的位模式。<strong>这两个值是读标志地址看不到的</strong>， 省掉一轮&quot;再去 dump C 区找是哪个元素&quot;的往返。</p>
+<p>串口参数与 L0 一致：<code>0x20100000</code>，32 位寄存器、间距 4 字节。 换板重编时加 <code>-DUART_BASE=...</code>，见 <code>tools/41_build_vectors.sh</code>。</p>
+<h3>⚠ FAIL 不等于硬件有错</h3>
+<p>程序自检做的是<strong>逐位比对</strong>，而矩阵扩展规范把累加的数值行为定为 implementation-defined —— <strong>逐位不一致是允许的</strong>，不代表实现有问题。 （在 QEMU 上跑这些 case 必然 FAIL：它的累加舍入粒度与本核不同， 差异约 1 ULP。这正是该判据不能直接用的例证。）</p>
+<p>判定要用 <code>check.py</code> 的<strong>归一化误差判据</strong>（以 <code>c_peak.bin</code> 归一化）， 而不是看串口这行 PASS/FAIL。串口的价值在<strong>快速定位</strong>： <code>idx</code> 指出哪个元素，<code>got</code>/<code>exp</code> 指出差多少 —— 差 1 ULP 和差一个数量级，含义完全不同。</p>
 <h2>目录里那些 .bin 要不要一起装？——不用</h2>
 <p><code>a.bin</code> / <code>b.bin</code> / <code>c_ref.bin</code> 的内容<strong>已经逐字节嵌在 <code>prog.bin</code> 里</strong>了， 在各自的地址上（见 <code>meta.json</code> 的 <code>segments</code>）。<strong>只装 <code>prog.bin</code> 这一个文件。</strong></p>
 <p>它们是同一份数据的独立副本，留着是为了<strong>区分「装载错了」和「算错了」</strong>：</p>

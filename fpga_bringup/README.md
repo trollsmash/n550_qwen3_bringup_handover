@@ -1,7 +1,7 @@
 # Qwen3-0.6B on RISC-V —— FPGA 上板交付包
 
 > 由 `tools/44_pack_fpga.sh` 生成，地址取自 `src/bsp/board.h`。
-> 生成时间：2026-08-25 16:32
+> 生成时间：2026-08-25 17:22
 
 板子：S2C，DDR `0x80000000`–`0xEFFFFFFF`，
 串口 `0x20100000`（16550, 8N1），CPU/AME 40 MHz。

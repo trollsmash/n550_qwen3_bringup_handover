@@ -355,6 +355,112 @@ _start:
 7:  li      t1, STATUS_ADDR
     sw      t0, 0(t1)
 
+#ifdef WITH_UART
+# ================= 串口输出（仅 FPGA 版编入） =================
+# UART 地址按板而异，默认 S2C；换板用 -DUART_BASE=... 覆盖。
+# 16550 的 LSR 在寄存器索引 5；本核寄存器 32 位、间距 4 字节，故偏移 5<<2。
+#ifndef UART_BASE
+#define UART_BASE 0x20100000
+#endif
+#ifndef UART_LSR_OFF
+#define UART_LSR_OFF 0x14
+#endif
+# 寄存器宽度也随板而变：本核的 16550 是 32 位寄存器、间距 4 字节，
+# 而 QEMU virt 那种是 8 位、间距 1 字节，对它用 sw 根本不响应。
+# 在 QEMU 上验证时加 -DUART_BYTE_ACCESS -DUART_LSR_OFF=5。
+#ifdef UART_BYTE_ACCESS
+#define UART_LD lbu
+#define UART_ST sb
+#else
+#define UART_LD lw
+#define UART_ST sw
+#endif
+
+    la      a0, umsg_hdr
+    jal     ra, uputs
+    li      t1, STATUS_ADDR
+    lw      t0, 0(t1)
+    li      t2, ST_PASS
+    beq     t0, t2, upass
+    la      a0, umsg_fail
+    jal     ra, uputs
+    li      t1, FAILIDX_ADDR
+    lw      s1, 0(t1)
+    mv      a0, s1
+    jal     ra, uputhex
+    # 顺带把该元素的实际值与期望值打出来：光有下标还得再去读内存。
+    slli    s2, s1, 2
+    la      a0, umsg_got
+    jal     ra, uputs
+    li      t3, C_ADDR
+    add     t3, t3, s2
+    lw      a0, 0(t3)
+    jal     ra, uputhex
+    la      a0, umsg_exp
+    jal     ra, uputs
+    li      t3, REF_ADDR
+    add     t3, t3, s2
+    lw      a0, 0(t3)
+    jal     ra, uputhex
+    la      a0, umsg_nl
+    jal     ra, uputs
+    j       udone
+upass:
+    la      a0, umsg_pass
+    jal     ra, uputs
+udone:
+    j       park
+
+# 打印 NUL 结尾字符串，a0 = 首地址。
+uputs:
+    li      t6, UART_BASE
+1:  lbu     t0, 0(a0)
+    beqz    t0, 3f
+2:  UART_LD t1, UART_LSR_OFF(t6)
+    andi    t1, t1, 0x20
+    beqz    t1, 2b
+    UART_ST t0, 0(t6)
+    addi    a0, a0, 1
+    j       1b
+3:  ret
+
+# 打印 a0 的 8 位十六进制。
+uputhex:
+    li      t6, UART_BASE
+    li      t2, 28
+1:  srl     t0, a0, t2
+    andi    t0, t0, 0xf
+    li      t1, 10
+    blt     t0, t1, 2f
+    addi    t0, t0, 'a' - 10
+    j       3f
+2:  addi    t0, t0, '0'
+3:  UART_LD t1, UART_LSR_OFF(t6)
+    andi    t1, t1, 0x20
+    beqz    t1, 3b
+    UART_ST t0, 0(t6)
+    addi    t2, t2, -4
+    bgez    t2, 1b
+    ret
+
+# 字符串放进独立的 .text.umsg 段。
+# 不能用 .rodata：prog.ld 只给 .text 划了位置，孤立的 .rodata 没有归宿。
+# 也不能直接塞在 .text.init 里：字符串长度不是 4 的倍数时会把后面的
+# 指令挤歪，链接器在 relax 阶段报 bad value，且不指出真正原因。
+# 用独立段名，prog.ld 的 *(.text*) 会收走它并排在所有代码之后。
+    .section .text.umsg, "a"
+    .align 2
+umsg_hdr:  .asciz "\r\n=== case 010 sync_sensitivity  M=32 N=128 K=256 ===\r\n"
+umsg_pass: .asciz "RESULT: PASS\r\n"
+umsg_fail: .asciz "RESULT: FAIL  idx="
+umsg_got:  .asciz "  got="
+umsg_exp:  .asciz "  exp="
+umsg_nl:   .asciz "\r\n"
+    # 切回代码段。.section 之后的内容都归新段，后面还有 park 循环，
+    # 留在数据段里链接器会在 relax 阶段报 bad value。
+    .section .text.init, "ax"
+#endif
+
 park:
     wfi
     j       park

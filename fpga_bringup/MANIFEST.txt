@@ -1,5 +1,5 @@
 # 文件清单（给人看的；机器校验用 checksums.md5）
-# 生成时间 2026-08-25 16:33
+# 生成时间 2026-08-25 17:23
 #
 # 注意：w.bin (1.11 GB) 不在本仓库，也不在下面的清单里。
 #       它的大小与 md5 见 L2_L3_fullmodel/GET_WEIGHTS.md，请单独核对。
@@ -16,8 +16,8 @@
            820  L1_ame_vectors/BUILD_INFO.txt
          23540  L1_ame_vectors/README.html
          16512  L1_ame_vectors/README.md
-          5828  L1_ame_vectors/README_FPGA.html
-          2200  L1_ame_vectors/README_FPGA.md
+          7820  L1_ame_vectors/README_FPGA.html
+          3728  L1_ame_vectors/README_FPGA.md
           8192  L1_ame_vectors/cases/001_bf16_full_tile/a.bin
          18553  L1_ame_vectors/cases/001_bf16_full_tile/a.hex
           8192  L1_ame_vectors/cases/001_bf16_full_tile/b.bin
@@ -27,11 +27,12 @@
          65536  L1_ame_vectors/cases/001_bf16_full_tile/c_ref.bin
         147589  L1_ame_vectors/cases/001_bf16_full_tile/c_ref.hex
           2193  L1_ame_vectors/cases/001_bf16_full_tile/meta.json
-          3878  L1_ame_vectors/cases/001_bf16_full_tile/prog.S
+          6984  L1_ame_vectors/cases/001_bf16_full_tile/prog.S
         786432  L1_ame_vectors/cases/001_bf16_full_tile/prog.bin
         157840  L1_ame_vectors/cases/001_bf16_full_tile/prog.elf
-       1769555  L1_ame_vectors/cases/001_bf16_full_tile/prog.hex
            481  L1_ame_vectors/cases/001_bf16_full_tile/prog.ld
+        786432  L1_ame_vectors/cases/001_bf16_full_tile/prog_fpga.bin
+        158240  L1_ame_vectors/cases/001_bf16_full_tile/prog_fpga.elf
           2048  L1_ame_vectors/cases/002_m1_gemv/a.bin
           4723  L1_ame_vectors/cases/002_m1_gemv/a.hex
         262144  L1_ame_vectors/cases/002_m1_gemv/b.bin
@@ -41,11 +42,12 @@
            512  L1_ame_vectors/cases/002_m1_gemv/c_ref.bin
           1274  L1_ame_vectors/cases/002_m1_gemv/c_ref.hex
           2077  L1_ame_vectors/cases/002_m1_gemv/meta.json
-         14094  L1_ame_vectors/cases/002_m1_gemv/prog.S
+         17193  L1_ame_vectors/cases/002_m1_gemv/prog.S
         721408  L1_ame_vectors/cases/002_m1_gemv/prog.bin
         281232  L1_ame_vectors/cases/002_m1_gemv/prog.elf
-       1623244  L1_ame_vectors/cases/002_m1_gemv/prog.hex
            474  L1_ame_vectors/cases/002_m1_gemv/prog.ld
+        721408  L1_ame_vectors/cases/002_m1_gemv/prog_fpga.bin
+        281600  L1_ame_vectors/cases/002_m1_gemv/prog_fpga.elf
            448  L1_ame_vectors/cases/003_partial_m/a.bin
           1121  L1_ame_vectors/cases/003_partial_m/a.hex
           8192  L1_ame_vectors/cases/003_partial_m/b.bin
@@ -55,11 +57,12 @@
           3584  L1_ame_vectors/cases/003_partial_m/c_ref.bin
           8188  L1_ame_vectors/cases/003_partial_m/c_ref.hex
           1980  L1_ame_vectors/cases/003_partial_m/meta.json
-          3812  L1_ame_vectors/cases/003_partial_m/prog.S
+          6911  L1_ame_vectors/cases/003_partial_m/prog.S
         724480  L1_ame_vectors/cases/003_partial_m/prog.bin
          30352  L1_ame_vectors/cases/003_partial_m/prog.elf
-       1630158  L1_ame_vectors/cases/003_partial_m/prog.hex
            476  L1_ame_vectors/cases/003_partial_m/prog.ld
+        724480  L1_ame_vectors/cases/003_partial_m/prog_fpga.bin
+         30720  L1_ame_vectors/cases/003_partial_m/prog_fpga.elf
          65536  L1_ame_vectors/cases/004_k_multiblock/a.bin
         147578  L1_ame_vectors/cases/004_k_multiblock/a.hex
          65536  L1_ame_vectors/cases/004_k_multiblock/b.bin
@@ -69,11 +72,12 @@
          65536  L1_ame_vectors/cases/004_k_multiblock/c_ref.bin
         147587  L1_ame_vectors/cases/004_k_multiblock/c_ref.hex
           2074  L1_ame_vectors/cases/004_k_multiblock/meta.json
-          6177  L1_ame_vectors/cases/004_k_multiblock/prog.S
+          9282  L1_ame_vectors/cases/004_k_multiblock/prog.S
         786432  L1_ame_vectors/cases/004_k_multiblock/prog.bin
         272528  L1_ame_vectors/cases/004_k_multiblock/prog.elf
-       1769553  L1_ame_vectors/cases/004_k_multiblock/prog.hex
            479  L1_ame_vectors/cases/004_k_multiblock/prog.ld
+        786432  L1_ame_vectors/cases/004_k_multiblock/prog_fpga.bin
+        272928  L1_ame_vectors/cases/004_k_multiblock/prog_fpga.elf
           8192  L1_ame_vectors/cases/005_partial_n/a.bin
          18548  L1_ame_vectors/cases/005_partial_n/a.hex
            832  L1_ame_vectors/cases/005_partial_n/b.bin
@@ -83,11 +87,12 @@
           6656  L1_ame_vectors/cases/005_partial_n/c_ref.bin
          15101  L1_ame_vectors/cases/005_partial_n/c_ref.hex
           2162  L1_ame_vectors/cases/005_partial_n/meta.json
-          3845  L1_ame_vectors/cases/005_partial_n/prog.S
+          6945  L1_ame_vectors/cases/005_partial_n/prog.S
         727552  L1_ame_vectors/cases/005_partial_n/prog.bin
          37520  L1_ame_vectors/cases/005_partial_n/prog.elf
-       1637070  L1_ame_vectors/cases/005_partial_n/prog.hex
            476  L1_ame_vectors/cases/005_partial_n/prog.ld
+        727552  L1_ame_vectors/cases/005_partial_n/prog_fpga.bin
+         37920  L1_ame_vectors/cases/005_partial_n/prog_fpga.elf
           4608  L1_ame_vectors/cases/006_partial_k/a.bin
          10484  L1_ame_vectors/cases/006_partial_k/a.hex
           4608  L1_ame_vectors/cases/006_partial_k/b.bin
@@ -97,11 +102,12 @@
          65536  L1_ame_vectors/cases/006_partial_k/c_ref.bin
         147584  L1_ame_vectors/cases/006_partial_k/c_ref.hex
           2514  L1_ame_vectors/cases/006_partial_k/meta.json
-          3900  L1_ame_vectors/cases/006_partial_k/prog.S
+          7001  L1_ame_vectors/cases/006_partial_k/prog.S
         786432  L1_ame_vectors/cases/006_partial_k/prog.bin
         157840  L1_ame_vectors/cases/006_partial_k/prog.elf
-       1769550  L1_ame_vectors/cases/006_partial_k/prog.hex
            476  L1_ame_vectors/cases/006_partial_k/prog.ld
+        786432  L1_ame_vectors/cases/006_partial_k/prog_fpga.bin
+        158240  L1_ame_vectors/cases/006_partial_k/prog_fpga.elf
          12288  L1_ame_vectors/cases/007_stride_gap/a.bin
          27765  L1_ame_vectors/cases/007_stride_gap/a.hex
          12288  L1_ame_vectors/cases/007_stride_gap/b.bin
@@ -111,11 +117,12 @@
          65536  L1_ame_vectors/cases/007_stride_gap/c_ref.bin
         147585  L1_ame_vectors/cases/007_stride_gap/c_ref.hex
           2045  L1_ame_vectors/cases/007_stride_gap/meta.json
-          3879  L1_ame_vectors/cases/007_stride_gap/prog.S
+          6981  L1_ame_vectors/cases/007_stride_gap/prog.S
         786432  L1_ame_vectors/cases/007_stride_gap/prog.bin
         166032  L1_ame_vectors/cases/007_stride_gap/prog.elf
-       1769551  L1_ame_vectors/cases/007_stride_gap/prog.hex
            477  L1_ame_vectors/cases/007_stride_gap/prog.ld
+        786432  L1_ame_vectors/cases/007_stride_gap/prog_fpga.bin
+        166432  L1_ame_vectors/cases/007_stride_gap/prog_fpga.elf
         262144  L1_ame_vectors/cases/008_massive_act/a.bin
         589947  L1_ame_vectors/cases/008_massive_act/a.hex
         262144  L1_ame_vectors/cases/008_massive_act/b.bin
@@ -125,11 +132,12 @@
          65536  L1_ame_vectors/cases/008_massive_act/c_ref.bin
         147586  L1_ame_vectors/cases/008_massive_act/c_ref.hex
           4434  L1_ame_vectors/cases/008_massive_act/meta.json
-         14153  L1_ame_vectors/cases/008_massive_act/prog.S
+         17258  L1_ame_vectors/cases/008_massive_act/prog.S
         786432  L1_ame_vectors/cases/008_massive_act/prog.bin
         665744  L1_ame_vectors/cases/008_massive_act/prog.elf
-       1769552  L1_ame_vectors/cases/008_massive_act/prog.hex
            478  L1_ame_vectors/cases/008_massive_act/prog.ld
+        786432  L1_ame_vectors/cases/008_massive_act/prog_fpga.bin
+        666144  L1_ame_vectors/cases/008_massive_act/prog_fpga.elf
          32768  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/a_src.bin
          73861  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/a_src.hex
          65536  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/b.bin
@@ -139,11 +147,12 @@
          16384  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/c_ref.bin
          36979  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/c_ref.hex
           2005  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/meta.json
-          8439  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.S
+         11551  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.S
        1441800  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.bin
         158048  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.elf
-       3244139  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.hex
            807  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.ld
+       1441800  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog_fpga.bin
+        158448  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog_fpga.elf
              4  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/xor_ref.bin
            124  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/xor_ref.hex
          32768  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/a_src.bin
@@ -155,11 +164,12 @@
          16384  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/c_ref.bin
          36979  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/c_ref.hex
           1957  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/meta.json
-          8197  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.S
+         11309  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.S
        1441800  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.bin
         158048  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.elf
-       3244139  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.hex
            807  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.ld
+       1441800  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog_fpga.bin
+        158448  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog_fpga.elf
              4  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/xor_ref.bin
            124  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/xor_ref.hex
          32768  L1_ame_vectors/cases/010_sync_sensitivity/a_src.bin
@@ -171,11 +181,12 @@
          16384  L1_ame_vectors/cases/010_sync_sensitivity/c_ref.bin
          36975  L1_ame_vectors/cases/010_sync_sensitivity/c_ref.hex
           2169  L1_ame_vectors/cases/010_sync_sensitivity/meta.json
-         11543  L1_ame_vectors/cases/010_sync_sensitivity/prog.S
+         14651  L1_ame_vectors/cases/010_sync_sensitivity/prog.S
        1441800  L1_ame_vectors/cases/010_sync_sensitivity/prog.bin
         157952  L1_ame_vectors/cases/010_sync_sensitivity/prog.elf
-       3244135  L1_ame_vectors/cases/010_sync_sensitivity/prog.hex
            803  L1_ame_vectors/cases/010_sync_sensitivity/prog.ld
+       1441800  L1_ame_vectors/cases/010_sync_sensitivity/prog_fpga.bin
+        158352  L1_ame_vectors/cases/010_sync_sensitivity/prog_fpga.elf
              4  L1_ame_vectors/cases/010_sync_sensitivity/xor_ref.bin
            120  L1_ame_vectors/cases/010_sync_sensitivity/xor_ref.hex
          32768  L1_ame_vectors/cases/011_fence_ordering/a_src.bin
@@ -187,11 +198,12 @@
          16384  L1_ame_vectors/cases/011_fence_ordering/c_ref.bin
          36973  L1_ame_vectors/cases/011_fence_ordering/c_ref.hex
           2097  L1_ame_vectors/cases/011_fence_ordering/meta.json
-         10263  L1_ame_vectors/cases/011_fence_ordering/prog.S
+         13369  L1_ame_vectors/cases/011_fence_ordering/prog.S
        1441800  L1_ame_vectors/cases/011_fence_ordering/prog.bin
         158048  L1_ame_vectors/cases/011_fence_ordering/prog.elf
-       3244133  L1_ame_vectors/cases/011_fence_ordering/prog.hex
            801  L1_ame_vectors/cases/011_fence_ordering/prog.ld
+       1441800  L1_ame_vectors/cases/011_fence_ordering/prog_fpga.bin
+        158448  L1_ame_vectors/cases/011_fence_ordering/prog_fpga.elf
              4  L1_ame_vectors/cases/011_fence_ordering/xor_ref.bin
            118  L1_ame_vectors/cases/011_fence_ordering/xor_ref.hex
          11321  L1_ame_vectors/check.py
