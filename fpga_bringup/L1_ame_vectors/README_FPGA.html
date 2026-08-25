@@ -75,7 +75,11 @@ td code, th code { white-space:nowrap; }
 <ol><li>PCIe 后门写 <code>cases/&lt;case&gt;/prog_fpga.bin</code> -&gt; <code>0x8000_0000</code> <strong>用 <code>prog_fpga.bin</code></strong>（带串口输出的 FPGA 版，见下节）， <strong>也不要用 .hex</strong> —— 那是给 Verilog <code>$readmemh</code> 的文本格式。</li><li>放开复位</li><li>轮询 <code>0x800C_0000</code>，等它变成 <code>0x600D600D</code></li><li>读 <code>0x800C_0004</code>：<code>0x50415353</code>(PASS) / <code>0x4641494C</code>(FAIL)</li><li>失败时 <code>0x800C_0008</code> 是首个不符元素的下标，<code>0x800A_0000</code> 起是结果矩阵 C</li></ol>
 <p><code>prog_fpga.bin</code> 是自包含的完整内存镜像，不需要额外加载权重或分词器。</p>
 <h2>两份镜像的区别</h2>
-<div class='tablewrap'><table><thead><tr><th>文件</th><th>给谁</th><th>区别</th></tr></thead><tbody><tr><td><code>prog.bin</code></td><td>RTL 验证</td><td>结果只写内存，完全不碰串口</td></tr><tr><td><strong><code>prog_fpga.bin</code></strong></td><td><strong>FPGA 上板</strong></td><td>同样的计算，额外把结果打到串口</td></tr></tbody></table></div>
+<div class='tablewrap'><table><thead><tr><th>文件</th><th>给谁</th><th>区别</th></tr></thead><tbody><tr><td><code>prog.bin</code></td><td>RTL 验证</td><td>结果只写内存；<strong>完全不依赖 cache 行为</strong></td></tr><tr><td><strong><code>prog_fpga.bin</code></strong></td><td><strong>FPGA 上板</strong></td><td>同样的计算，额外有串口输出与 cache 维护</td></tr></tbody></table></div>
+<p>两版的差别不只是串口。<strong>上板必须用 <code>prog_fpga.bin</code></strong>，因为它多了三处 cache 操作，缺一处就会出现「看着像硬件坏了、其实是 cache 没同步」的现象：</p>
+<div class='tablewrap'><table><thead><tr><th>位置</th><th>做什么</th><th>不做会怎样</th></tr></thead><tbody><tr><td>复位后</td><td><code>l1d_inv_all</code> + <code>fence.i</code></td><td>上电时 cache 里是随机值，CPU 命中垃圾 —— <strong>后门明明写进去了，CPU 却看不到镜像</strong></td></tr><tr><td>AME 写完 C</td><td><code>l1d_clean_all</code> + <code>l1d_inv_all</code></td><td><code>msce32</code> 绕过 L1D 直写 DDR，CPU 却拿 cache 里预置的 <code>0xA5A5A5A5</code> 去比对</td></tr><tr><td>写完标志</td><td><code>l1d_clean_all</code></td><td>标志停在 L1D，<strong>host 后门永远读不到 PASS/FAIL</strong></td></tr></tbody></table></div>
+<p>复位那两条的顺序不能反：本核的 <code>fence.i</code> 实现是先对 D-cache 做 clean all 再失效 I-cache，若 cache 里有上电残留的随机脏行，那一步会把它们写回 DDR， <strong>反过来破坏刚加载的镜像</strong>。所以必须先 <code>l1d_inv_all</code> 丢弃。</p>
+<p>RTL 版刻意不含这些：前 8 个纯 AME case 的价值就在于 cache 子系统还没做好时， 矩阵单元本身的正确性照样能验 —— 加了 cache 指令会把这条价值抹掉。</p>
 <p>两者装载地址与流程完全相同，只差一个串口输出。跑完串口直接给出：</p>
 <pre><code>=== case 001 bf16_full_tile  M=128 N=128 K=32 ===
 RESULT: PASS</code></pre>

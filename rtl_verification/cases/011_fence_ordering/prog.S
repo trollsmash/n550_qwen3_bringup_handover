@@ -39,6 +39,17 @@
 _start:
     csrr    t0, mhartid
     bnez    t0, park
+
+#ifdef FOR_FPGA
+    # ---- 复位后先把 cache 清空（详见函数注释）----
+    # ★ 这两条的顺序不能反：本核的 fence.i 实现是先对 D-cache 做
+    #   clean all，再失效 I-cache。若 cache 里有上电残留的随机脏行，
+    #   那一步会把它们写回 DDR，反过来破坏刚刚加载进去的镜像。
+    #   所以必须先 inv_all 丢弃（不写回），再让 fence.i 去清 I-cache。
+    l1d_inv_all
+    fence   rw, rw
+    fence.i
+#endif
     # FS|VS|MS 三个上下文状态域都要开：本 case 同时用到浮点、向量、矩阵
     li      t0, (1 << 13) | (1 << 9) | (1 << 29)
     csrs    mstatus, t0
@@ -323,7 +334,13 @@ cmp_done:
 7:  li      t1, STATUS_ADDR
     sw      t0, 0(t1)
 
-#ifdef WITH_UART
+#ifdef FOR_FPGA
+    # 让 host 后门能看到上面写的标志（详见函数注释）
+    l1d_clean_all
+    fence   rw, rw
+#endif
+
+#ifdef FOR_FPGA
 # ================= 串口输出（仅 FPGA 版编入） =================
 # UART 地址按板而异，默认 S2C；换板用 -DUART_BASE=... 覆盖。
 # 16550 的 LSR 在寄存器索引 5；本核寄存器 32 位、间距 4 字节，故偏移 5<<2。
