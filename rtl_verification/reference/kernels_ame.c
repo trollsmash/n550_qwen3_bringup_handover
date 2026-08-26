@@ -142,11 +142,23 @@ static void gemm_impl(int tiled, float *c, const float *a, const uint16_t *b,
                         ? b + b_tile_off(n0, k0, K)
                         : b + (size_t)n0 * K + k0;
 
-                /* A: mtilem×mtilek 左矩阵     B: mtilen×mtilek 右矩阵 */
-                __asm__ volatile("mlae16 tr0,(%0),%1"
-                                 :: "r"(ap), "r"(a_stride) : "memory");
-                __asm__ volatile("mlbe16 tr1,(%0),%1"
-                                 :: "r"(bp), "r"(b_stride) : "memory");
+                /* A: mtilem×mtilek 左矩阵     B: mtilen×mtilek 右矩阵
+                 *
+                 * ★ 地址与 stride 必须钉死在 a0 / a1。
+                 *   用普通的 "r" 约束时编译器会自由分配，真机上实测到分到
+                 *   (a1, t5) 的组合会被判为**非法指令**（mcause=2），而同一条
+                 *   mlae16 用 (a0, a1) 就正常 —— 编码里除寄存器号外完全一致。
+                 *   L0 的 step5 与 L1 的用例都是手写、寄存器固定，所以它们全过，
+                 *   唯独这里让编译器分配，于是只有 L2 崩。
+                 *   在硬件确认寄存器编码的限制之前，这里保持与 L0/L1 一致。 */
+                { register const uint16_t *p __asm__("a0") = ap;
+                  register long st __asm__("a1") = a_stride;
+                  __asm__ volatile("mlae16 tr0,(%0),%1"
+                                   :: "r"(p), "r"(st) : "memory"); }
+                { register const uint16_t *p __asm__("a0") = bp;
+                  register long st __asm__("a1") = b_stride;
+                  __asm__ volatile("mlbe16 tr1,(%0),%1"
+                                   :: "r"(p), "r"(st) : "memory"); }
                 /* acc0 += A · Bᵀ   —— 操作数顺序 (md, B, A) */
                 __asm__ volatile("mfmacc.s.bf16 acc0,tr1,tr0");
             }
@@ -154,8 +166,11 @@ static void gemm_impl(int tiled, float *c, const float *a, const uint16_t *b,
             /* 写出 mtilem×mtilen 的 FP32 结果。K 维已累加完，此处 k 值无关。 */
             set_tile(mm, nn, AME_TILE_K);
             float *cp = c + (size_t)m0 * N + n0;
-            __asm__ volatile("msce32 acc0,(%0),%1"
-                             :: "r"(cp), "r"(c_stride) : "memory");
+            /* 同样钉死寄存器，理由见上面 mlae16 处。 */
+            { register float *p __asm__("a0") = cp;
+              register long st __asm__("a1") = c_stride;
+              __asm__ volatile("msce32 acc0,(%0),%1"
+                               :: "r"(p), "r"(st) : "memory"); }
         }
     }
 

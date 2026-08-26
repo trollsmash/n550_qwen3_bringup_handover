@@ -1,5 +1,5 @@
 # 文件清单（给人看的；机器校验用 checksums.md5）
-# 生成时间 2026-08-26 16:54
+# 生成时间 2026-08-26 17:17
 #
 # 注意：w.bin (1.11 GB) 不在本仓库，也不在下面的清单里。
 #       它的大小与 md5 见 L2_L3_fullmodel/GET_WEIGHTS.md，请单独核对。
@@ -211,9 +211,9 @@
           3549  L1_ame_vectors/golden_src/41_build_vectors.sh
          32090  L1_ame_vectors/index.json
            570  L2_L3_fullmodel/addresses.txt
-         19144  L2_L3_fullmodel/qwen3_s2c.bin
-        354474  L2_L3_fullmodel/qwen3_s2c.diss
-        204336  L2_L3_fullmodel/qwen3_s2c.elf
+         19192  L2_L3_fullmodel/qwen3_s2c.bin
+        356309  L2_L3_fullmodel/qwen3_s2c.diss
+        204952  L2_L3_fullmodel/qwen3_s2c.elf
           3216  L2_L3_fullmodel/qwen3_s2c.sym
        3409013  L2_L3_fullmodel/tok.bin
          12644  README.html
@@ -227,7 +227,7 @@
          11735  src/src/bsp/start.S
           2444  src/src/bsp/string_min.c
           4940  src/src/kernels.h
-         10552  src/src/kernels_ame.c
+         11648  src/src/kernels_ame.c
           2904  src/src/kernels_hwsim.c
           3626  src/src/kernels_rvvbf16.c
            795  src/src/kernels_scalar.c

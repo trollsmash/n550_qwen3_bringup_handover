@@ -798,14 +798,14 @@ void qwen3_main(void) {
     80000538:	cb450513          	addi	a0,a0,-844 # 800011e8 <msg_hint+0x207>
     8000053c:	d37ff0ef          	jal	80000272 <P>
     80000540:	08261537          	lui	a0,0x8261
-    80000544:	65150513          	addi	a0,a0,1617 # 8261651 <_stack_size+0x8221651>
+    80000544:	71650513          	addi	a0,a0,1814 # 8261716 <_stack_size+0x8221716>
     80000548:	d85ff0ef          	jal	800002cc <X>
     8000054c:	00001517          	auipc	a0,0x1
     80000550:	ca450513          	addi	a0,a0,-860 # 800011f0 <msg_hint+0x20f>
     80000554:	d1fff0ef          	jal	80000272 <P>
     *BOARD_PTR(uint32_t, a) = v;
     80000558:	08261737          	lui	a4,0x8261
-    8000055c:	65170713          	addi	a4,a4,1617 # 8261651 <_stack_size+0x8221651>
+    8000055c:	71670713          	addi	a4,a4,1814 # 8261716 <_stack_size+0x8221716>
     80000560:	d418                	sw	a4,40(s0)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
     80000562:	0010702b          	l1d_clean_all
