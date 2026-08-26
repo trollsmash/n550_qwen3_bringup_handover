@@ -1,5 +1,5 @@
 # 文件清单（给人看的；机器校验用 checksums.md5）
-# 生成时间 2026-08-25 19:03
+# 生成时间 2026-08-26 09:45
 #
 # 注意：w.bin (1.11 GB) 不在本仓库，也不在下面的清单里。
 #       它的大小与 md5 见 L2_L3_fullmodel/GET_WEIGHTS.md，请单独核对。
@@ -7,10 +7,10 @@
 # 校验：md5sum -c checksums.md5
 
         字节  文件
-          4888  L0_bringup/bringup_s2c.bin
-         70216  L0_bringup/bringup_s2c.diss
-         60720  L0_bringup/bringup_s2c.elf
-           998  L0_bringup/bringup_s2c.sym
+          5432  L0_bringup/bringup_s2c.bin
+         78547  L0_bringup/bringup_s2c.diss
+         64864  L0_bringup/bringup_s2c.elf
+          1028  L0_bringup/bringup_s2c.sym
          11653  L0_bringup/checklist.html
           6236  L0_bringup/checklist.md
            820  L1_ame_vectors/BUILD_INFO.txt
@@ -27,7 +27,7 @@
          65536  L1_ame_vectors/cases/001_bf16_full_tile/c_ref.bin
         147589  L1_ame_vectors/cases/001_bf16_full_tile/c_ref.hex
           2193  L1_ame_vectors/cases/001_bf16_full_tile/meta.json
-          7774  L1_ame_vectors/cases/001_bf16_full_tile/prog.S
+          7574  L1_ame_vectors/cases/001_bf16_full_tile/prog.S
         786432  L1_ame_vectors/cases/001_bf16_full_tile/prog.bin
         157840  L1_ame_vectors/cases/001_bf16_full_tile/prog.elf
            481  L1_ame_vectors/cases/001_bf16_full_tile/prog.ld
@@ -42,7 +42,7 @@
            512  L1_ame_vectors/cases/002_m1_gemv/c_ref.bin
           1274  L1_ame_vectors/cases/002_m1_gemv/c_ref.hex
           2077  L1_ame_vectors/cases/002_m1_gemv/meta.json
-         17983  L1_ame_vectors/cases/002_m1_gemv/prog.S
+         17783  L1_ame_vectors/cases/002_m1_gemv/prog.S
         721408  L1_ame_vectors/cases/002_m1_gemv/prog.bin
         281232  L1_ame_vectors/cases/002_m1_gemv/prog.elf
            474  L1_ame_vectors/cases/002_m1_gemv/prog.ld
@@ -57,7 +57,7 @@
           3584  L1_ame_vectors/cases/003_partial_m/c_ref.bin
           8188  L1_ame_vectors/cases/003_partial_m/c_ref.hex
           1980  L1_ame_vectors/cases/003_partial_m/meta.json
-          7701  L1_ame_vectors/cases/003_partial_m/prog.S
+          7501  L1_ame_vectors/cases/003_partial_m/prog.S
         724480  L1_ame_vectors/cases/003_partial_m/prog.bin
          30352  L1_ame_vectors/cases/003_partial_m/prog.elf
            476  L1_ame_vectors/cases/003_partial_m/prog.ld
@@ -72,7 +72,7 @@
          65536  L1_ame_vectors/cases/004_k_multiblock/c_ref.bin
         147587  L1_ame_vectors/cases/004_k_multiblock/c_ref.hex
           2074  L1_ame_vectors/cases/004_k_multiblock/meta.json
-         10072  L1_ame_vectors/cases/004_k_multiblock/prog.S
+          9872  L1_ame_vectors/cases/004_k_multiblock/prog.S
         786432  L1_ame_vectors/cases/004_k_multiblock/prog.bin
         272528  L1_ame_vectors/cases/004_k_multiblock/prog.elf
            479  L1_ame_vectors/cases/004_k_multiblock/prog.ld
@@ -87,7 +87,7 @@
           6656  L1_ame_vectors/cases/005_partial_n/c_ref.bin
          15101  L1_ame_vectors/cases/005_partial_n/c_ref.hex
           2162  L1_ame_vectors/cases/005_partial_n/meta.json
-          7735  L1_ame_vectors/cases/005_partial_n/prog.S
+          7535  L1_ame_vectors/cases/005_partial_n/prog.S
         727552  L1_ame_vectors/cases/005_partial_n/prog.bin
          37520  L1_ame_vectors/cases/005_partial_n/prog.elf
            476  L1_ame_vectors/cases/005_partial_n/prog.ld
@@ -102,7 +102,7 @@
          65536  L1_ame_vectors/cases/006_partial_k/c_ref.bin
         147584  L1_ame_vectors/cases/006_partial_k/c_ref.hex
           2514  L1_ame_vectors/cases/006_partial_k/meta.json
-          7791  L1_ame_vectors/cases/006_partial_k/prog.S
+          7591  L1_ame_vectors/cases/006_partial_k/prog.S
         786432  L1_ame_vectors/cases/006_partial_k/prog.bin
         157840  L1_ame_vectors/cases/006_partial_k/prog.elf
            476  L1_ame_vectors/cases/006_partial_k/prog.ld
@@ -117,7 +117,7 @@
          65536  L1_ame_vectors/cases/007_stride_gap/c_ref.bin
         147585  L1_ame_vectors/cases/007_stride_gap/c_ref.hex
           2045  L1_ame_vectors/cases/007_stride_gap/meta.json
-          7771  L1_ame_vectors/cases/007_stride_gap/prog.S
+          7571  L1_ame_vectors/cases/007_stride_gap/prog.S
         786432  L1_ame_vectors/cases/007_stride_gap/prog.bin
         166032  L1_ame_vectors/cases/007_stride_gap/prog.elf
            477  L1_ame_vectors/cases/007_stride_gap/prog.ld
@@ -132,7 +132,7 @@
          65536  L1_ame_vectors/cases/008_massive_act/c_ref.bin
         147586  L1_ame_vectors/cases/008_massive_act/c_ref.hex
           4434  L1_ame_vectors/cases/008_massive_act/meta.json
-         18048  L1_ame_vectors/cases/008_massive_act/prog.S
+         17848  L1_ame_vectors/cases/008_massive_act/prog.S
         786432  L1_ame_vectors/cases/008_massive_act/prog.bin
         665744  L1_ame_vectors/cases/008_massive_act/prog.elf
            478  L1_ame_vectors/cases/008_massive_act/prog.ld
@@ -147,7 +147,7 @@
          16384  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/c_ref.bin
          36979  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/c_ref.hex
           2005  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/meta.json
-         12173  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.S
+         11973  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.S
        1441800  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.bin
         158048  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.elf
            807  L1_ame_vectors/cases/009a_rvv_ame_handoff_cbo/prog.ld
@@ -164,7 +164,7 @@
          16384  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/c_ref.bin
          36979  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/c_ref.hex
           1957  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/meta.json
-         11931  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.S
+         11731  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.S
        1441800  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.bin
         158048  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.elf
            807  L1_ame_vectors/cases/009b_rvv_ame_handoff_l1d/prog.ld
@@ -181,7 +181,7 @@
          16384  L1_ame_vectors/cases/010_sync_sensitivity/c_ref.bin
          36975  L1_ame_vectors/cases/010_sync_sensitivity/c_ref.hex
           2169  L1_ame_vectors/cases/010_sync_sensitivity/meta.json
-         15273  L1_ame_vectors/cases/010_sync_sensitivity/prog.S
+         15073  L1_ame_vectors/cases/010_sync_sensitivity/prog.S
        1441800  L1_ame_vectors/cases/010_sync_sensitivity/prog.bin
         157952  L1_ame_vectors/cases/010_sync_sensitivity/prog.elf
            803  L1_ame_vectors/cases/010_sync_sensitivity/prog.ld
@@ -198,7 +198,7 @@
          16384  L1_ame_vectors/cases/011_fence_ordering/c_ref.bin
          36973  L1_ame_vectors/cases/011_fence_ordering/c_ref.hex
           2097  L1_ame_vectors/cases/011_fence_ordering/meta.json
-         13991  L1_ame_vectors/cases/011_fence_ordering/prog.S
+         13791  L1_ame_vectors/cases/011_fence_ordering/prog.S
        1441800  L1_ame_vectors/cases/011_fence_ordering/prog.bin
         158048  L1_ame_vectors/cases/011_fence_ordering/prog.elf
            801  L1_ame_vectors/cases/011_fence_ordering/prog.ld
@@ -221,10 +221,10 @@
            570  addresses.txt
           6044  src/BUILD.md
           2845  src/src/Makefile
-         19143  src/src/bsp/board.h
+         19795  src/src/bsp/board.h
            599  src/src/bsp/libm_stub.c
           1337  src/src/bsp/qemu_virt.ld
-          7223  src/src/bsp/start.S
+          6567  src/src/bsp/start.S
           2444  src/src/bsp/string_min.c
           4940  src/src/kernels.h
          10552  src/src/kernels_ame.c
@@ -233,7 +233,7 @@
            795  src/src/kernels_scalar.c
           2620  src/src/kernels_tiled.c
          10297  src/src/main.c
-         19213  src/src/main_baremetal.c
+         22136  src/src/main_baremetal.c
          11548  src/src/main_qemu.c
           2072  src/src/ops.h
           8451  src/src/ops_rvv.c
@@ -244,6 +244,6 @@
           3901  src/src/test_kernels.c
          13529  src/src/tokenizer.c
           3776  src/src/tokenizer.h
-         20298  src/tests/bringup.c
+         24259  src/tests/bringup.c
          13439  src/tools/build_riscv.sh
           4769  src/tools/env.sh

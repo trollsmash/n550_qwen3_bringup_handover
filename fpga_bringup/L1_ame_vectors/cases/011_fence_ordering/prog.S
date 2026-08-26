@@ -41,13 +41,9 @@ _start:
     bnez    t0, park
 
 #ifdef FOR_FPGA
-    # ---- 复位后先把 cache 清空（详见函数注释）----
-    # ★ 这两条的顺序不能反：本核的 fence.i 实现是先对 D-cache 做
-    #   clean all，再失效 I-cache。若 cache 里有上电残留的随机脏行，
-    #   那一步会把它们写回 DDR，反过来破坏刚刚加载进去的镜像。
-    #   所以必须先 inv_all 丢弃（不写回），再让 fence.i 去清 I-cache。
-    l1d_inv_all
-    fence   rw, rw
+    # 硬件复位已清 L1 的 valid 位（2026-08-26 FPGA 确认），故不再需要
+    # l1d_inv_all。fence.i 留着防软复位后 I-cache 残留旧指令 ——
+    # 此处尚未写过数据，它内部那次 clean all 没有脏行可写回。
     fence.i
 #endif
     # FS|VS|MS 三个上下文状态域都要开：本 case 同时用到浮点、向量、矩阵

@@ -49,6 +49,13 @@
  * 单靠 MB_STATUS 不够：软失败（如 step3）之后程序继续跑，
  * 后面几步的状态写入会把失败痕迹覆盖掉。这个字段只置位、不清除。 */
 #define MB_FAILMASK     MB(0x1C)
+/* [读] 内存带宽，单位 MB/s（整数）。host 不必换算周期数即可直接看。
+ * ★ 偏移接在 MB_BUILD_ID(0x28) 之后。加新字段前先看下面这张表把偏移排完，
+ *   两个字段落到同一地址时后写的会覆盖先写的，host 读到什么全凭调用顺序，
+ *   而且不会有任何报错。 */
+#define MB_BW_AME       MB(0x2C)
+#define MB_BW_RVV       MB(0x30)
+/* 下一个可用偏移：0x34（0x80 起是 host 侧的区域，别越过去） */
 /* [读] 同步前直接读到的 AME 结果。与 MB_AME_RESULT 对照可一眼区分故障类型：
  *   RAW=哨兵 且 RESULT=32.0f  -> 缓存一致性问题，同步已生效
  *   RAW 与 RESULT 都是哨兵      -> msce32 没写进来，查 AME 或地址
@@ -315,6 +322,69 @@ static uint64_t perf_sample(void) {
     return t1 - t0;
 }
 
+/* ══════════════ 内存带宽 ══════════════
+ *
+ * step6 报的是"每次 tile 装载多少周期"，那是个相对量；带宽是绝对量，
+ * 能直接和 DDR 理论峰值比，一眼看出访存效率是 5% 还是 80%。
+ *
+ * 测两条路径，因为它们在本核上是分开的：
+ *   AME  绕过 L1D 直连 DDR —— 全模型 99% 的访存走这条
+ *   RVV  经过 L1D          —— 激活值的搬运走这条
+ * 两者差得远时就知道该查哪一侧，不必两边都翻。
+ *
+ * 数据量取 4 MiB：远超 32 KB 的 L1D，RVV 那条不会退化成测 cache 带宽。
+ * 缓冲放在 DRAM 16 MiB 处 —— 程序自身连栈带 BSS 不到 300 KB，
+ * mailbox 在 127 MiB 处，两边都碰不着。内容是什么无所谓，只测读取速度。 */
+#define BW_BUF_ADDR  (BOARD_DRAM_BASE + 0x01000000)
+#define BW_BYTES     (4u * 1024 * 1024)
+
+static uint64_t bw_ame_read(void) {
+    set_tile(128, 128, 32);
+    unsigned long p = BW_BUF_ADDR, end = BW_BUF_ADDR + BW_BYTES;
+    uint64_t t0 = rd_mcycle();
+    while (p + 8192 <= end) {
+        /* 一条 mlae16 读 128 行 x 64 B = 8 KiB */
+        register const void *q __asm__("a0") = (const void *)(uintptr_t)p;
+        register long st __asm__("a1") = 64;
+        __asm__ volatile("mlae16 tr0,(%0),%1" :: "r"(q), "r"(st) : "memory");
+        p += 8192;
+    }
+    __asm__ volatile("mrelease");
+    return rd_mcycle() - t0;
+}
+
+static uint64_t bw_rvv_read(void) {
+    unsigned long p = BW_BUF_ADDR, end = BW_BUF_ADDR + BW_BYTES;
+    uint64_t t0 = rd_mcycle();
+    /* e32 m8：VLEN=1024 bit=128 B，八个寄存器一次搬 1 KiB */
+    __asm__ volatile("vsetvli t0, zero, e32, m8, ta, ma" ::: "t0");
+    while (p + 1024 <= end) {
+        __asm__ volatile("vle32.v v0, (%0)" :: "r"(p) : "memory");
+        p += 1024;
+    }
+    return rd_mcycle() - t0;
+}
+
+/* 打印 X.XX GB/s。裸机没有浮点输出，先放大 100 倍再拆整数与小数两段。
+ * 中间量必须用 64 位：4 MiB x 40 MHz x 100 已到 1.7e16，32 位差得远。 */
+static void print_gbps(const char *tag, uint64_t cycles) {
+    P(tag);
+    if (cycles == 0) { P("  n/a\n"); return; }
+#if BOARD_CPU_HZ
+    {
+        uint64_t centi = (uint64_t)BW_BYTES * (uint64_t)BOARD_CPU_HZ * 100u
+                         / cycles / 1000000000u;
+        P("  "); U((unsigned long)(centi / 100)); P(".");
+        if (centi % 100 < 10) P("0");
+        U((unsigned long)(centi % 100)); P(" GB/s");
+        P("   ("); U((unsigned long)cycles); P(" 周期)\n");
+    }
+#else
+    P("  "); U((unsigned long)cycles);
+    P(" 周期（本平台 mcycle 非真实周期，无法换算带宽）\n");
+#endif
+}
+
 /* 失败步骤的位掩码。软失败（继续跑）与硬失败（当场停机）都记在这里，
  * 最后统一裁决 —— 否则后续阶段的状态写入会盖掉先前的失败痕迹。 */
 static uint32_t g_failmask;
@@ -421,6 +491,23 @@ void qwen3_main(void) {
     P("\n");
 #endif
     if (!g_failmask) mb_set(MB_STATUS, ST_PERF);
+
+    /* ---- 步骤 7：内存带宽 ----
+     * 与 step6 互补：那边是"每次 tile 多少周期"，这边是绝对带宽，
+     * 可以直接和 DDR 理论峰值比，看出访存效率的量级。 */
+    P("step7 带宽        读 "); U(BW_BYTES >> 20); P(" MiB x2 ...\n");
+    {
+        uint64_t ca = bw_ame_read();
+        uint64_t cr = bw_rvv_read();
+        print_gbps("      AME 装载(绕 L1D)", ca);
+        print_gbps("      RVV 读取(经 L1D)", cr);
+#if BOARD_CPU_HZ
+        mb_set(MB_BW_AME, (uint32_t)((uint64_t)BW_BYTES * BOARD_CPU_HZ
+                                     / (ca ? ca : 1) / 1000000u));
+        mb_set(MB_BW_RVV, (uint32_t)((uint64_t)BW_BYTES * BOARD_CPU_HZ
+                                     / (cr ? cr : 1) / 1000000u));
+#endif
+    }
 
     /* ---- 裁决 ----
      * 必须看累计的 failmask，不能只看跑到了最后一步：

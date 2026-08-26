@@ -71,11 +71,11 @@ td code, th code { white-space:nowrap; }
 <body>
 <main>
 <h1>S2C 上板操作单 — L0 基础通路</h1>
-<blockquote><p>本文件由 <code>tools/43_gen_bringup_doc.sh</code> 从 <code>src/bsp/board.h</code> 生成。 改了板级地址就重新生成，<strong>不要手工编辑本文件</strong>。 生成时间：2026-08-25 16:01</p></blockquote>
+<blockquote><p>本文件由 <code>tools/43_gen_bringup_doc.sh</code> 从 <code>src/bsp/board.h</code> 生成。 改了板级地址就重新生成，<strong>不要手工编辑本文件</strong>。 生成时间：2026-08-26 09:44</p></blockquote>
 <p>跑这一步是为了在碰模型代码之前，把板子的基础通路一项项验穿。 全模型镜像 1.1 GB，加载慢、出错难定位；基础通路没通时跑它纯属浪费时间。</p>
 <hr>
 <h2>一、写入（S2C GUI 工具，两项）</h2>
-<div class='tablewrap'><table><thead><tr><th>#</th><th>写什么</th><th>目标地址</th><th>大小</th></tr></thead><tbody><tr><td>1</td><td>文件 <code>bringup_s2c.bin</code></td><td><code>0x80000000</code></td><td>4888 B</td></tr><tr><td>2</td><td><strong>32 位值</strong> <code>0x5A5AC3C3</code></td><td><code>0x87F00080</code></td><td>4 B</td></tr></tbody></table></div>
+<div class='tablewrap'><table><thead><tr><th>#</th><th>写什么</th><th>目标地址</th><th>大小</th></tr></thead><tbody><tr><td>1</td><td>文件 <code>bringup_s2c.bin</code></td><td><code>0x80000000</code></td><td>5432 B</td></tr><tr><td>2</td><td><strong>32 位值</strong> <code>0x5A5AC3C3</code></td><td><code>0x87F00080</code></td><td>4 B</td></tr></tbody></table></div>
 <p>第 2 项<strong>不是文件，是往那个地址写一个立即数</strong>。别漏 —— 它是整套设计的支点： 程序会把它读回来比对，这是唯一能反证&quot;PCIe 后门写 DDR 真的生效了&quot;的手段。 没有它，&quot;PCIe 没写进去&quot;和&quot;程序崩了&quot;两种情况完全分不开。</p>
 <p>文件已放到项目目录下，<strong>Windows 路径可直接粘进 GUI 工具</strong>：</p>
 <pre><code>C:\Users\39543\Desktop\Qwen3\deliverables\fpga\bringup_s2c.bin</code></pre>

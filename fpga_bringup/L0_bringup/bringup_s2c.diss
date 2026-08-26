@@ -5,95 +5,90 @@
 Disassembly of section .text:
 
 0000000080000000 <_start>:
-     * I-cache，软件无能为力 —— 值得向 FPGA 团队确认复位是否清 L1I。
+     *   所以那次 clean all 是空操作。**若挪到写过数据之后**，它就会把脏行
+     *   刷进 DDR —— 在别的场景下这正是覆盖掉后门刚写内容的元凶。
      *
-     * QEMU 没有 xdcache，l1d_inv_all 在那边是非法指令，故条件编译。
-     * QEMU 的镜像由 generic loader 装载，也不存在陈旧 cache 的问题。 */
-#ifdef BOARD_USE_L1D_ALL
-    l1d_inv_all
-    80000000:	0020702b          	l1d_inv_all
-    /* 与下面的 fence.i 隔开：inv_all 和 fence.i 内部那次 clean all 之间
-     * 没有架构层面的顺序保证，万一 clean 跑到 inv 前面就前功尽弃。 */
-    fence   rw, rw
-    80000004:	0330000f          	fence	rw,rw
-#endif
+     * 局限：fence.i 管不了它**自己之前**的取指。若 I-cache 里 _start 开头
+     * 这几条就是旧指令，CPU 根本执行不到这里 —— 那只能靠硬件复位解决。 */
     fence.i
-    80000008:	0000100f          	fence.i
+    80000000:	0000100f          	fence.i
 
     /* 只让 hart 0 继续，其余核原地睡眠。
      * 放在 cache 清理之后：每个核清的都是自己的私有 L1，各清各的无副作用。 */
     csrr    t0, mhartid
-    8000000c:	f14022f3          	csrr	t0,mhartid
+    80000004:	f14022f3          	csrr	t0,mhartid
     bnez    t0, park
-    80000010:	04029b63          	bnez	t0,80000066 <park>
+    80000008:	04029b63          	bnez	t0,8000005e <park>
      * 现象是 store/load access fault，且 epc 指向的指令看起来毫无问题 ——
      * 极难联想到是 gp 的锅。
      * .option norelax 是必需的：否则这条 la 自己会被 relax 成 gp 相对寻址（鸡生蛋）。 */
     .option push
     .option norelax
     la      gp, __global_pointer$
-    80000014:	00002197          	auipc	gp,0x2
-    80000018:	b0418193          	addi	gp,gp,-1276 # 80001b18 <__global_pointer$>
+    8000000c:	00002197          	auipc	gp,0x2
+    80000010:	d2c18193          	addi	gp,gp,-724 # 80001d38 <__global_pointer$>
     .option pop
 
     /* 设栈指针（栈顶由 linker script 给出） */
     la      sp, _stack_top
-    8000001c:	00061117          	auipc	sp,0x61
-    80000020:	42410113          	addi	sp,sp,1060 # 80061440 <_end>
+    80000014:	00061117          	auipc	sp,0x61
+    80000018:	62c10113          	addi	sp,sp,1580 # 80061640 <_end>
 
     /* 清 BSS：静态 arena 依赖 BSS 被清零 */
     la      t0, _bss_start
-    80000024:	00001297          	auipc	t0,0x1
-    80000028:	31c28293          	addi	t0,t0,796 # 80001340 <g_failmask>
+    8000001c:	00001297          	auipc	t0,0x1
+    80000020:	52428293          	addi	t0,t0,1316 # 80001540 <g_failmask>
     la      t1, _bss_end
-    8000002c:	00021317          	auipc	t1,0x21
-    80000030:	41430313          	addi	t1,t1,1044 # 80021440 <_bss_end>
+    80000024:	00021317          	auipc	t1,0x21
+    80000028:	61c30313          	addi	t1,t1,1564 # 80021640 <_bss_end>
 1:  bgeu    t0, t1, 2f
-    80000034:	0062f663          	bgeu	t0,t1,80000040 <_start+0x40>
+    8000002c:	0062f663          	bgeu	t0,t1,80000038 <_start+0x38>
     sd      zero, 0(t0)
-    80000038:	0002b023          	sd	zero,0(t0)
+    80000030:	0002b023          	sd	zero,0(t0)
     addi    t0, t0, 8
-    8000003c:	02a1                	addi	t0,t0,8
+    80000034:	02a1                	addi	t0,t0,8
     j       1b
-    8000003e:	bfdd                	j	80000034 <_start+0x34>
+    80000036:	bfdd                	j	8000002c <_start+0x2c>
      *   mstatus.FS [14:13] 浮点   —— 不开则任何浮点指令陷入
      *   mstatus.VS [10:9]  向量   —— 不开则 RVV 指令陷入
      *   mstatus.MS [30:29] 矩阵   —— 不开则所有 AME 指令报 illegal instruction
      * MS 这一位极易遗漏：QEMU 里由 require_matrix() 检查，
      * 漏了的现象与「指令编码不被支持」完全一样，非常容易误判。 */
     li      t0, (1 << 13)         /* FS = Initial */
-    80000040:	6289                	lui	t0,0x2
+    80000038:	6289                	lui	t0,0x2
+    csrs    mstatus, t0
+    8000003a:	3002a073          	csrs	mstatus,t0
+    li      t0, (1 << 9)          /* VS = Initial */
+    8000003e:	20000293          	li	t0,512
     csrs    mstatus, t0
     80000042:	3002a073          	csrs	mstatus,t0
-    li      t0, (1 << 9)          /* VS = Initial */
-    80000046:	20000293          	li	t0,512
+    li      t0, (1 << 29)         /* MS = Initial */
+    80000046:	200002b7          	lui	t0,0x20000
     csrs    mstatus, t0
     8000004a:	3002a073          	csrs	mstatus,t0
-    li      t0, (1 << 29)         /* MS = Initial */
-    8000004e:	200002b7          	lui	t0,0x20000
-    csrs    mstatus, t0
-    80000052:	3002a073          	csrs	mstatus,t0
 
     /* 安装 trap handler。
      * 不装的话 mtvec 是 0，任何异常都跳到地址 0 去执行垃圾 ——
      * 现象是程序"卡住"且 CPU 占满，与"正在慢慢算"完全无法区分。
      * 真机上没有别的观测手段，只会更难查。 */
     la      t0, trap_entry
-    80000056:	00000297          	auipc	t0,0x0
-    8000005a:	01a28293          	addi	t0,t0,26 # 80000070 <trap_entry>
+    8000004e:	00000297          	auipc	t0,0x0
+    80000052:	02228293          	addi	t0,t0,34 # 80000070 <trap_entry>
     csrw    mtvec, t0             /* Direct 模式：低两位为 0 */
-    8000005e:	30529073          	csrw	mtvec,t0
+    80000056:	30529073          	csrw	mtvec,t0
 
     call    qwen3_main
-    80000062:	286000ef          	jal	800002e8 <qwen3_main>
+    8000005a:	32c000ef          	jal	80000386 <qwen3_main>
 
-0000000080000066 <park>:
+000000008000005e <park>:
 
 park:
     wfi
-    80000066:	10500073          	wfi
+    8000005e:	10500073          	wfi
     j       park
-    8000006a:	bff5                	j	80000066 <park>
+    80000062:	bff5                	j	8000005e <park>
+    80000064:	00000013          	nop
+    80000068:	00000013          	nop
     8000006c:	00000013          	nop
 
 0000000080000070 <trap_entry>:
@@ -120,7 +115,7 @@ trap_entry:
 
     la      t4, msg_trap
     8000008a:	00001e97          	auipc	t4,0x1
-    8000008e:	b9ee8e93          	addi	t4,t4,-1122 # 80000c28 <msg_trap>
+    8000008e:	d16e8e93          	addi	t4,t4,-746 # 80000da0 <msg_trap>
     jal     t3, put_str
     80000092:	04600e6f          	jal	t3,800000d8 <put_str>
     csrr    t0, mcause
@@ -130,7 +125,7 @@ trap_entry:
 
     la      t4, msg_epc
     8000009e:	00001e97          	auipc	t4,0x1
-    800000a2:	baae8e93          	addi	t4,t4,-1110 # 80000c48 <msg_epc>
+    800000a2:	d22e8e93          	addi	t4,t4,-734 # 80000dc0 <msg_epc>
     jal     t3, put_str
     800000a6:	03200e6f          	jal	t3,800000d8 <put_str>
     csrr    t0, mepc
@@ -140,7 +135,7 @@ trap_entry:
 
     la      t4, msg_tval
     800000b2:	00001e97          	auipc	t4,0x1
-    800000b6:	ba6e8e93          	addi	t4,t4,-1114 # 80000c58 <msg_tval>
+    800000b6:	d1ee8e93          	addi	t4,t4,-738 # 80000dd0 <msg_tval>
     jal     t3, put_str
     800000ba:	01e00e6f          	jal	t3,800000d8 <put_str>
     csrr    t0, mtval
@@ -150,7 +145,7 @@ trap_entry:
 
     la      t4, msg_hint
     800000c6:	00001e97          	auipc	t4,0x1
-    800000ca:	ba2e8e93          	addi	t4,t4,-1118 # 80000c68 <msg_hint>
+    800000ca:	d1ae8e93          	addi	t4,t4,-742 # 80000de0 <msg_hint>
     jal     t3, put_str
     800000ce:	00a00e6f          	jal	t3,800000d8 <put_str>
 
@@ -215,1273 +210,1444 @@ put_hex:
     8000010c:	fe0351e3          	bgez	t1,800000ee <put_hex+0x4>
     jr      t3
     80000110:	8e02                	jr	t3
+	...
 
-0000000080000112 <P>:
+000000008000011a <P>:
      * 宁可字符发飞，也要让程序继续往下走，把 mailbox 填完。 */
     for (int i = 0; i < 100000; i++)
         if (uart_rd(UART_LSR) & LSR_THRE) break;
     uart_wr(UART_THR, (uint8_t)c);
 }
 static void P(const char *s) { while (*s) { if (*s == '\n') putc_('\r'); putc_(*s++); } }
-    80000112:	00054783          	lbu	a5,0(a0)
-    80000116:	cf8d                	beqz	a5,80000150 <P+0x3e>
+    8000011a:	00054783          	lbu	a5,0(a0)
+    8000011e:	cf8d                	beqz	a5,80000158 <P+0x3e>
     return *BOARD_PTR(uint32_t, uart_addr(idx));
-    80000118:	201006b7          	lui	a3,0x20100
-    8000011c:	06d1                	addi	a3,a3,20 # 20100014 <_stack_size+0x200c0014>
+    80000120:	201006b7          	lui	a3,0x20100
+    80000124:	06d1                	addi	a3,a3,20 # 20100014 <_stack_size+0x200c0014>
 static void P(const char *s) { while (*s) { if (*s == '\n') putc_('\r'); putc_(*s++); } }
-    8000011e:	4829                	li	a6,10
+    80000126:	4829                	li	a6,10
     *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
-    80000120:	201005b7          	lui	a1,0x20100
-    80000124:	48b5                	li	a7,13
+    80000128:	201005b7          	lui	a1,0x20100
+    8000012c:	48b5                	li	a7,13
 static void P(const char *s) { while (*s) { if (*s == '\n') putc_('\r'); putc_(*s++); } }
-    80000126:	03078663          	beq	a5,a6,80000152 <P+0x40>
-    8000012a:	6761                	lui	a4,0x18
-    8000012c:	0505                	addi	a0,a0,1
-    8000012e:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
-    80000132:	fff54603          	lbu	a2,-1(a0)
+    8000012e:	03078663          	beq	a5,a6,8000015a <P+0x40>
+    80000132:	6761                	lui	a4,0x18
+    80000134:	0505                	addi	a0,a0,1
+    80000136:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
+    8000013a:	fff54603          	lbu	a2,-1(a0)
     for (int i = 0; i < 100000; i++)
-    80000136:	a011                	j	8000013a <P+0x28>
-    80000138:	c711                	beqz	a4,80000144 <P+0x32>
+    8000013e:	a011                	j	80000142 <P+0x28>
+    80000140:	c711                	beqz	a4,8000014c <P+0x32>
     return *BOARD_PTR(uint32_t, uart_addr(idx));
-    8000013a:	429c                	lw	a5,0(a3)
+    80000142:	429c                	lw	a5,0(a3)
     for (int i = 0; i < 100000; i++)
-    8000013c:	377d                	addiw	a4,a4,-1
+    80000144:	377d                	addiw	a4,a4,-1
         if (uart_rd(UART_LSR) & LSR_THRE) break;
-    8000013e:	0207f793          	andi	a5,a5,32
-    80000142:	dbfd                	beqz	a5,80000138 <P+0x26>
+    80000146:	0207f793          	andi	a5,a5,32
+    8000014a:	dbfd                	beqz	a5,80000140 <P+0x26>
     uart_wr(UART_THR, (uint8_t)c);
-    80000144:	0006079b          	sext.w	a5,a2
+    8000014c:	0006079b          	sext.w	a5,a2
     *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
-    80000148:	c19c                	sw	a5,0(a1)
+    80000150:	c19c                	sw	a5,0(a1)
 static void P(const char *s) { while (*s) { if (*s == '\n') putc_('\r'); putc_(*s++); } }
-    8000014a:	00054783          	lbu	a5,0(a0)
-    8000014e:	ffe1                	bnez	a5,80000126 <P+0x14>
-    80000150:	8082                	ret
-    80000152:	6761                	lui	a4,0x18
-    80000154:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
-    80000158:	a011                	j	8000015c <P+0x4a>
+    80000152:	00054783          	lbu	a5,0(a0)
+    80000156:	ffe1                	bnez	a5,8000012e <P+0x14>
+    80000158:	8082                	ret
+    8000015a:	6761                	lui	a4,0x18
+    8000015c:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
+    80000160:	a011                	j	80000164 <P+0x4a>
     for (int i = 0; i < 100000; i++)
-    8000015a:	c711                	beqz	a4,80000166 <P+0x54>
+    80000162:	c711                	beqz	a4,8000016e <P+0x54>
     return *BOARD_PTR(uint32_t, uart_addr(idx));
-    8000015c:	429c                	lw	a5,0(a3)
+    80000164:	429c                	lw	a5,0(a3)
     for (int i = 0; i < 100000; i++)
-    8000015e:	377d                	addiw	a4,a4,-1
+    80000166:	377d                	addiw	a4,a4,-1
         if (uart_rd(UART_LSR) & LSR_THRE) break;
-    80000160:	0207f793          	andi	a5,a5,32
-    80000164:	dbfd                	beqz	a5,8000015a <P+0x48>
+    80000168:	0207f793          	andi	a5,a5,32
+    8000016c:	dbfd                	beqz	a5,80000162 <P+0x48>
     *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
-    80000166:	0115a023          	sw	a7,0(a1) # 20100000 <_stack_size+0x200c0000>
+    8000016e:	0115a023          	sw	a7,0(a1) # 20100000 <_stack_size+0x200c0000>
 }
-    8000016a:	b7c1                	j	8000012a <P+0x18>
+    80000172:	b7c1                	j	80000132 <P+0x18>
 
-000000008000016c <X>:
+0000000080000174 <X>:
     char b[24]; int i = 0;
     if (!v) { putc_('0'); return; }
     while (v) { b[i++] = (char)('0' + v % 10); v /= 10; }
     while (i) putc_(b[--i]);
 }
 static void X(unsigned long v) {
-    8000016c:	1141                	addi	sp,sp,-16
-    8000016e:	e022                	sd	s0,0(sp)
-    80000170:	842a                	mv	s0,a0
+    80000174:	1141                	addi	sp,sp,-16
+    80000176:	e022                	sd	s0,0(sp)
+    80000178:	842a                	mv	s0,a0
     P("0x");
-    80000172:	00001517          	auipc	a0,0x1
-    80000176:	c5650513          	addi	a0,a0,-938 # 80000dc8 <msg_hint+0x160>
+    8000017a:	00001517          	auipc	a0,0x1
+    8000017e:	dc650513          	addi	a0,a0,-570 # 80000f40 <msg_hint+0x160>
 static void X(unsigned long v) {
-    8000017a:	e406                	sd	ra,8(sp)
+    80000182:	e406                	sd	ra,8(sp)
     P("0x");
-    8000017c:	f97ff0ef          	jal	80000112 <P>
+    80000184:	f97ff0ef          	jal	8000011a <P>
     return *BOARD_PTR(uint32_t, uart_addr(idx));
-    80000180:	201006b7          	lui	a3,0x20100
-    80000184:	06d1                	addi	a3,a3,20 # 20100014 <_stack_size+0x200c0014>
+    80000188:	201006b7          	lui	a3,0x20100
+    8000018c:	06d1                	addi	a3,a3,20 # 20100014 <_stack_size+0x200c0014>
     for (int s = 28; s >= 0; s -= 4) putc_("0123456789abcdef"[(v >> s) & 0xf]);
-    80000186:	4671                	li	a2,28
-    80000188:	00001897          	auipc	a7,0x1
-    8000018c:	c4888893          	addi	a7,a7,-952 # 80000dd0 <msg_hint+0x168>
+    8000018e:	4671                	li	a2,28
+    80000190:	00001897          	auipc	a7,0x1
+    80000194:	db888893          	addi	a7,a7,-584 # 80000f48 <msg_hint+0x168>
     *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
-    80000190:	20100837          	lui	a6,0x20100
+    80000198:	20100837          	lui	a6,0x20100
     for (int s = 28; s >= 0; s -= 4) putc_("0123456789abcdef"[(v >> s) & 0xf]);
-    80000194:	5571                	li	a0,-4
-    80000196:	00c457b3          	srl	a5,s0,a2
-    8000019a:	8bbd                	andi	a5,a5,15
-    8000019c:	97c6                	add	a5,a5,a7
-    8000019e:	6761                	lui	a4,0x18
-    800001a0:	0007c583          	lbu	a1,0(a5)
-    800001a4:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
-    800001a8:	a011                	j	800001ac <X+0x40>
+    8000019c:	5571                	li	a0,-4
+    8000019e:	00c457b3          	srl	a5,s0,a2
+    800001a2:	8bbd                	andi	a5,a5,15
+    800001a4:	97c6                	add	a5,a5,a7
+    800001a6:	6761                	lui	a4,0x18
+    800001a8:	0007c583          	lbu	a1,0(a5)
+    800001ac:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
+    800001b0:	a011                	j	800001b4 <X+0x40>
     for (int i = 0; i < 100000; i++)
-    800001aa:	c711                	beqz	a4,800001b6 <X+0x4a>
+    800001b2:	c711                	beqz	a4,800001be <X+0x4a>
     return *BOARD_PTR(uint32_t, uart_addr(idx));
-    800001ac:	429c                	lw	a5,0(a3)
+    800001b4:	429c                	lw	a5,0(a3)
     for (int i = 0; i < 100000; i++)
-    800001ae:	377d                	addiw	a4,a4,-1
+    800001b6:	377d                	addiw	a4,a4,-1
         if (uart_rd(UART_LSR) & LSR_THRE) break;
-    800001b0:	0207f793          	andi	a5,a5,32
-    800001b4:	dbfd                	beqz	a5,800001aa <X+0x3e>
+    800001b8:	0207f793          	andi	a5,a5,32
+    800001bc:	dbfd                	beqz	a5,800001b2 <X+0x3e>
     uart_wr(UART_THR, (uint8_t)c);
-    800001b6:	0005879b          	sext.w	a5,a1
+    800001be:	0005879b          	sext.w	a5,a1
     *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
-    800001ba:	00f82023          	sw	a5,0(a6) # 20100000 <_stack_size+0x200c0000>
+    800001c2:	00f82023          	sw	a5,0(a6) # 20100000 <_stack_size+0x200c0000>
     for (int s = 28; s >= 0; s -= 4) putc_("0123456789abcdef"[(v >> s) & 0xf]);
-    800001be:	3671                	addiw	a2,a2,-4
-    800001c0:	fca61be3          	bne	a2,a0,80000196 <X+0x2a>
+    800001c6:	3671                	addiw	a2,a2,-4
+    800001c8:	fca61be3          	bne	a2,a0,8000019e <X+0x2a>
 }
-    800001c4:	60a2                	ld	ra,8(sp)
-    800001c6:	6402                	ld	s0,0(sp)
-    800001c8:	0141                	addi	sp,sp,16
-    800001ca:	8082                	ret
+    800001cc:	60a2                	ld	ra,8(sp)
+    800001ce:	6402                	ld	s0,0(sp)
+    800001d0:	0141                	addi	sp,sp,16
+    800001d2:	8082                	ret
 
-00000000800001cc <mark_fail>:
+00000000800001d4 <mark_fail>:
 /* 失败步骤的位掩码。软失败（继续跑）与硬失败（当场停机）都记在这里，
  * 最后统一裁决 —— 否则后续阶段的状态写入会盖掉先前的失败痕迹。 */
 static uint32_t g_failmask;
 
 static void mark_fail(int step) {
     g_failmask |= (1u << step);
-    800001cc:	00001697          	auipc	a3,0x1
-    800001d0:	17468693          	addi	a3,a3,372 # 80001340 <g_failmask>
-    800001d4:	4290                	lw	a2,0(a3)
-    800001d6:	4785                	li	a5,1
-    800001d8:	00a797bb          	sllw	a5,a5,a0
-    800001dc:	8fd1                	or	a5,a5,a2
+    800001d4:	00001697          	auipc	a3,0x1
+    800001d8:	36c68693          	addi	a3,a3,876 # 80001540 <g_failmask>
+    800001dc:	4290                	lw	a2,0(a3)
+    800001de:	4785                	li	a5,1
+    800001e0:	00a797bb          	sllw	a5,a5,a0
+    800001e4:	8fd1                	or	a5,a5,a2
     *BOARD_PTR(uint32_t, a) = v;
-    800001de:	0087f737          	lui	a4,0x87f
+    800001e6:	0087f737          	lui	a4,0x87f
     g_failmask |= (1u << step);
-    800001e2:	c29c                	sw	a5,0(a3)
+    800001ea:	c29c                	sw	a5,0(a3)
     *BOARD_PTR(uint32_t, a) = v;
-    800001e4:	0722                	slli	a4,a4,0x8
-    800001e6:	0087f6b7          	lui	a3,0x87f
-    800001ea:	cf5c                	sw	a5,28(a4)
-    800001ec:	00869793          	slli	a5,a3,0x8
+    800001ec:	0722                	slli	a4,a4,0x8
+    800001ee:	0087f6b7          	lui	a3,0x87f
+    800001f2:	cf5c                	sw	a5,28(a4)
+    800001f4:	00869793          	slli	a5,a3,0x8
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    800001f0:	0010702b          	l1d_clean_all
+    800001f8:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    800001f4:	0330000f          	fence	rw,rw
+    800001fc:	0330000f          	fence	rw,rw
     mb_set(MB_FAILMASK, g_failmask);
     mb_set(MB_STATUS, ST_FAIL(step));
-    800001f8:	b0000737          	lui	a4,0xb0000
-    800001fc:	0f070713          	addi	a4,a4,240 # ffffffffb00000f0 <_end+0xffffffff2ff9ecb0>
-    80000200:	8d59                	or	a0,a0,a4
+    80000200:	b0000737          	lui	a4,0xb0000
+    80000204:	0f070713          	addi	a4,a4,240 # ffffffffb00000f0 <_end+0xffffffff2ff9eab0>
+    80000208:	8d59                	or	a0,a0,a4
     *BOARD_PTR(uint32_t, a) = v;
-    80000202:	c388                	sw	a0,0(a5)
+    8000020a:	c388                	sw	a0,0(a5)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    80000204:	0010702b          	l1d_clean_all
+    8000020c:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    80000208:	0330000f          	fence	rw,rw
+    80000210:	0330000f          	fence	rw,rw
 }
-    8000020c:	8082                	ret
+    80000214:	8082                	ret
 
-000000008000020e <U>:
+0000000080000216 <U>:
     if (!v) { putc_('0'); return; }
-    8000020e:	c541                	beqz	a0,80000296 <U+0x88>
+    80000216:	c541                	beqz	a0,8000029e <U+0x88>
     while (v) { b[i++] = (char)('0' + v % 10); v /= 10; }
-    80000210:	ccccd7b7          	lui	a5,0xccccd
-    80000214:	ccd78793          	addi	a5,a5,-819 # ffffffffcccccccd <_end+0xffffffff4cc6b88d>
+    80000218:	ccccd7b7          	lui	a5,0xccccd
+    8000021c:	ccd78793          	addi	a5,a5,-819 # ffffffffcccccccd <_end+0xffffffff4cc6b68d>
 static void U(unsigned long v) {
-    80000218:	1101                	addi	sp,sp,-32
-    8000021a:	0030                	addi	a2,sp,8
+    80000220:	1101                	addi	sp,sp,-32
+    80000222:	0030                	addi	a2,sp,8
     while (v) { b[i++] = (char)('0' + v % 10); v /= 10; }
-    8000021c:	02079893          	slli	a7,a5,0x20
-    80000220:	86b2                	mv	a3,a2
-    80000222:	98be                	add	a7,a7,a5
-    80000224:	4325                	li	t1,9
-    80000226:	031537b3          	mulhu	a5,a0,a7
-    8000022a:	85aa                	mv	a1,a0
-    8000022c:	8836                	mv	a6,a3
-    8000022e:	0685                	addi	a3,a3,1 # 87f001 <_stack_size+0x83f001>
-    80000230:	838d                	srli	a5,a5,0x3
-    80000232:	00279713          	slli	a4,a5,0x2
-    80000236:	973e                	add	a4,a4,a5
-    80000238:	0706                	slli	a4,a4,0x1
-    8000023a:	8d19                	sub	a0,a0,a4
-    8000023c:	0305051b          	addiw	a0,a0,48
-    80000240:	fea68fa3          	sb	a0,-1(a3)
-    80000244:	853e                	mv	a0,a5
-    80000246:	feb360e3          	bltu	t1,a1,80000226 <U+0x18>
-    8000024a:	40c807bb          	subw	a5,a6,a2
-    8000024e:	2785                	addiw	a5,a5,1
+    80000224:	02079893          	slli	a7,a5,0x20
+    80000228:	86b2                	mv	a3,a2
+    8000022a:	98be                	add	a7,a7,a5
+    8000022c:	4325                	li	t1,9
+    8000022e:	031537b3          	mulhu	a5,a0,a7
+    80000232:	85aa                	mv	a1,a0
+    80000234:	8836                	mv	a6,a3
+    80000236:	0685                	addi	a3,a3,1 # 87f001 <_stack_size+0x83f001>
+    80000238:	838d                	srli	a5,a5,0x3
+    8000023a:	00279713          	slli	a4,a5,0x2
+    8000023e:	973e                	add	a4,a4,a5
+    80000240:	0706                	slli	a4,a4,0x1
+    80000242:	8d19                	sub	a0,a0,a4
+    80000244:	0305051b          	addiw	a0,a0,48
+    80000248:	fea68fa3          	sb	a0,-1(a3)
+    8000024c:	853e                	mv	a0,a5
+    8000024e:	feb360e3          	bltu	t1,a1,8000022e <U+0x18>
+    80000252:	40c807bb          	subw	a5,a6,a2
+    80000256:	2785                	addiw	a5,a5,1
     while (i) putc_(b[--i]);
-    80000250:	fff7871b          	addiw	a4,a5,-1
-    80000254:	fff60513          	addi	a0,a2,-1
-    80000258:	1702                	slli	a4,a4,0x20
-    8000025a:	9301                	srli	a4,a4,0x20
-    8000025c:	953e                	add	a0,a0,a5
+    80000258:	fff7871b          	addiw	a4,a5,-1
+    8000025c:	fff60513          	addi	a0,a2,-1
+    80000260:	1702                	slli	a4,a4,0x20
+    80000262:	9301                	srli	a4,a4,0x20
+    80000264:	953e                	add	a0,a0,a5
     return *BOARD_PTR(uint32_t, uart_addr(idx));
-    8000025e:	201006b7          	lui	a3,0x20100
-    80000262:	8d19                	sub	a0,a0,a4
-    80000264:	963e                	add	a2,a2,a5
-    80000266:	06d1                	addi	a3,a3,20 # 20100014 <_stack_size+0x200c0014>
+    80000266:	201006b7          	lui	a3,0x20100
+    8000026a:	8d19                	sub	a0,a0,a4
+    8000026c:	963e                	add	a2,a2,a5
+    8000026e:	06d1                	addi	a3,a3,20 # 20100014 <_stack_size+0x200c0014>
     *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
-    80000268:	20100837          	lui	a6,0x20100
+    80000270:	20100837          	lui	a6,0x20100
     while (i) putc_(b[--i]);
-    8000026c:	6761                	lui	a4,0x18
-    8000026e:	fff64583          	lbu	a1,-1(a2)
-    80000272:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
-    80000276:	a011                	j	8000027a <U+0x6c>
+    80000274:	6761                	lui	a4,0x18
+    80000276:	fff64583          	lbu	a1,-1(a2)
+    8000027a:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
+    8000027e:	a011                	j	80000282 <U+0x6c>
     for (int i = 0; i < 100000; i++)
-    80000278:	c711                	beqz	a4,80000284 <U+0x76>
+    80000280:	c711                	beqz	a4,8000028c <U+0x76>
     return *BOARD_PTR(uint32_t, uart_addr(idx));
-    8000027a:	429c                	lw	a5,0(a3)
+    80000282:	429c                	lw	a5,0(a3)
     for (int i = 0; i < 100000; i++)
-    8000027c:	377d                	addiw	a4,a4,-1
+    80000284:	377d                	addiw	a4,a4,-1
         if (uart_rd(UART_LSR) & LSR_THRE) break;
-    8000027e:	0207f793          	andi	a5,a5,32
-    80000282:	dbfd                	beqz	a5,80000278 <U+0x6a>
+    80000286:	0207f793          	andi	a5,a5,32
+    8000028a:	dbfd                	beqz	a5,80000280 <U+0x6a>
     uart_wr(UART_THR, (uint8_t)c);
-    80000284:	0005879b          	sext.w	a5,a1
+    8000028c:	0005879b          	sext.w	a5,a1
     *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
-    80000288:	00f82023          	sw	a5,0(a6) # 20100000 <_stack_size+0x200c0000>
+    80000290:	00f82023          	sw	a5,0(a6) # 20100000 <_stack_size+0x200c0000>
     while (i) putc_(b[--i]);
-    8000028c:	167d                	addi	a2,a2,-1
-    8000028e:	fcc51fe3          	bne	a0,a2,8000026c <U+0x5e>
+    80000294:	167d                	addi	a2,a2,-1
+    80000296:	fcc51fe3          	bne	a0,a2,80000274 <U+0x5e>
 }
-    80000292:	6105                	addi	sp,sp,32
-    80000294:	8082                	ret
-    80000296:	6761                	lui	a4,0x18
+    8000029a:	6105                	addi	sp,sp,32
+    8000029c:	8082                	ret
+    8000029e:	6761                	lui	a4,0x18
     return *BOARD_PTR(uint32_t, uart_addr(idx));
-    80000298:	201006b7          	lui	a3,0x20100
-    8000029c:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
-    800002a0:	06d1                	addi	a3,a3,20 # 20100014 <_stack_size+0x200c0014>
-    800002a2:	a011                	j	800002a6 <U+0x98>
+    800002a0:	201006b7          	lui	a3,0x20100
+    800002a4:	6a070713          	addi	a4,a4,1696 # 186a0 <__jvt_base$+0x186a0>
+    800002a8:	06d1                	addi	a3,a3,20 # 20100014 <_stack_size+0x200c0014>
+    800002aa:	a011                	j	800002ae <U+0x98>
     for (int i = 0; i < 100000; i++)
-    800002a4:	c711                	beqz	a4,800002b0 <U+0xa2>
+    800002ac:	c711                	beqz	a4,800002b8 <U+0xa2>
     return *BOARD_PTR(uint32_t, uart_addr(idx));
-    800002a6:	429c                	lw	a5,0(a3)
+    800002ae:	429c                	lw	a5,0(a3)
     for (int i = 0; i < 100000; i++)
-    800002a8:	377d                	addiw	a4,a4,-1
+    800002b0:	377d                	addiw	a4,a4,-1
         if (uart_rd(UART_LSR) & LSR_THRE) break;
-    800002aa:	0207f793          	andi	a5,a5,32
-    800002ae:	dbfd                	beqz	a5,800002a4 <U+0x96>
+    800002b2:	0207f793          	andi	a5,a5,32
+    800002b6:	dbfd                	beqz	a5,800002ac <U+0x96>
     *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
-    800002b0:	201007b7          	lui	a5,0x20100
-    800002b4:	03000713          	li	a4,48
-    800002b8:	c398                	sw	a4,0(a5)
+    800002b8:	201007b7          	lui	a5,0x20100
+    800002bc:	03000713          	li	a4,48
+    800002c0:	c398                	sw	a4,0(a5)
     if (!v) { putc_('0'); return; }
-    800002ba:	8082                	ret
+    800002c2:	8082                	ret
 
-00000000800002bc <fail>:
+00000000800002c4 <fail>:
 
 /* 硬失败：这一步不过，后面的测试没有意义，当场停机。 */
 static void fail(int step) {
-    800002bc:	1141                	addi	sp,sp,-16
-    800002be:	e406                	sd	ra,8(sp)
-    800002c0:	e022                	sd	s0,0(sp)
-    800002c2:	842a                	mv	s0,a0
+    800002c4:	1141                	addi	sp,sp,-16
+    800002c6:	e406                	sd	ra,8(sp)
+    800002c8:	e022                	sd	s0,0(sp)
+    800002ca:	842a                	mv	s0,a0
     mark_fail(step);
-    800002c4:	f09ff0ef          	jal	800001cc <mark_fail>
+    800002cc:	f09ff0ef          	jal	800001d4 <mark_fail>
     P("\n*** FAIL at step "); U((unsigned long)step); P(" ***\n");
-    800002c8:	00001517          	auipc	a0,0x1
-    800002cc:	b2050513          	addi	a0,a0,-1248 # 80000de8 <msg_hint+0x180>
-    800002d0:	e43ff0ef          	jal	80000112 <P>
-    800002d4:	8522                	mv	a0,s0
-    800002d6:	f39ff0ef          	jal	8000020e <U>
-    800002da:	00001517          	auipc	a0,0x1
-    800002de:	b2650513          	addi	a0,a0,-1242 # 80000e00 <msg_hint+0x198>
-    800002e2:	e31ff0ef          	jal	80000112 <P>
+    800002d0:	00001517          	auipc	a0,0x1
+    800002d4:	c9050513          	addi	a0,a0,-880 # 80000f60 <msg_hint+0x180>
+    800002d8:	e43ff0ef          	jal	8000011a <P>
+    800002dc:	8522                	mv	a0,s0
+    800002de:	f39ff0ef          	jal	80000216 <U>
+    800002e2:	00001517          	auipc	a0,0x1
+    800002e6:	c9650513          	addi	a0,a0,-874 # 80000f78 <msg_hint+0x198>
+    800002ea:	e31ff0ef          	jal	8000011a <P>
     for (;;) { }
-    800002e6:	a001                	j	800002e6 <fail+0x2a>
+    800002ee:	a001                	j	800002ee <fail+0x2a>
 
-00000000800002e8 <qwen3_main>:
+00000000800002f0 <print_gbps>:
+static void print_gbps(const char *tag, uint64_t cycles) {
+    800002f0:	1101                	addi	sp,sp,-32
+    800002f2:	e822                	sd	s0,16(sp)
+    800002f4:	ec06                	sd	ra,24(sp)
+    800002f6:	842e                	mv	s0,a1
+    P(tag);
+    800002f8:	e23ff0ef          	jal	8000011a <P>
+    if (cycles == 0) { P("  n/a\n"); return; }
+    800002fc:	00001517          	auipc	a0,0x1
+    80000300:	c8450513          	addi	a0,a0,-892 # 80000f80 <msg_hint+0x1a0>
+    80000304:	c435                	beqz	s0,80000370 <print_gbps+0x80>
+        uint64_t centi = (uint64_t)BW_BYTES * (uint64_t)BOARD_CPU_HZ * 100u
+    80000306:	e426                	sd	s1,8(sp)
+    80000308:	010004b7          	lui	s1,0x1000
+    8000030c:	0284d4b3          	divu	s1,s1,s0
+        P("  "); U((unsigned long)(centi / 100)); P(".");
+    80000310:	00001517          	auipc	a0,0x1
+    80000314:	c7850513          	addi	a0,a0,-904 # 80000f88 <msg_hint+0x1a8>
+    80000318:	e04a                	sd	s2,0(sp)
+    8000031a:	e01ff0ef          	jal	8000011a <P>
+    8000031e:	06400913          	li	s2,100
+    80000322:	0324d533          	divu	a0,s1,s2
+    80000326:	ef1ff0ef          	jal	80000216 <U>
+    8000032a:	00001517          	auipc	a0,0x1
+    8000032e:	c6650513          	addi	a0,a0,-922 # 80000f90 <msg_hint+0x1b0>
+    80000332:	de9ff0ef          	jal	8000011a <P>
+        if (centi % 100 < 10) P("0");
+    80000336:	0324f4b3          	remu	s1,s1,s2
+    8000033a:	47a5                	li	a5,9
+    8000033c:	0297fe63          	bgeu	a5,s1,80000378 <print_gbps+0x88>
+        U((unsigned long)(centi % 100)); P(" GB/s");
+    80000340:	8526                	mv	a0,s1
+    80000342:	ed5ff0ef          	jal	80000216 <U>
+    80000346:	00001517          	auipc	a0,0x1
+    8000034a:	c5a50513          	addi	a0,a0,-934 # 80000fa0 <msg_hint+0x1c0>
+    8000034e:	dcdff0ef          	jal	8000011a <P>
+        P("   ("); U((unsigned long)cycles); P(" 周期)\n");
+    80000352:	00001517          	auipc	a0,0x1
+    80000356:	c5650513          	addi	a0,a0,-938 # 80000fa8 <msg_hint+0x1c8>
+    8000035a:	dc1ff0ef          	jal	8000011a <P>
+    8000035e:	8522                	mv	a0,s0
+    80000360:	eb7ff0ef          	jal	80000216 <U>
+    80000364:	64a2                	ld	s1,8(sp)
+    80000366:	6902                	ld	s2,0(sp)
+    80000368:	00001517          	auipc	a0,0x1
+    8000036c:	c4850513          	addi	a0,a0,-952 # 80000fb0 <msg_hint+0x1d0>
+}
+    80000370:	6442                	ld	s0,16(sp)
+    80000372:	60e2                	ld	ra,24(sp)
+    80000374:	6105                	addi	sp,sp,32
+        P("   ("); U((unsigned long)cycles); P(" 周期)\n");
+    80000376:	b355                	j	8000011a <P>
+        if (centi % 100 < 10) P("0");
+    80000378:	00001517          	auipc	a0,0x1
+    8000037c:	c2050513          	addi	a0,a0,-992 # 80000f98 <msg_hint+0x1b8>
+    80000380:	d9bff0ef          	jal	8000011a <P>
+    80000384:	bf75                	j	80000340 <print_gbps+0x50>
+
+0000000080000386 <qwen3_main>:
 }
 
 void qwen3_main(void) {
-    800002e8:	7179                	addi	sp,sp,-48
-    800002ea:	f022                	sd	s0,32(sp)
+    80000386:	7179                	addi	sp,sp,-48
+    80000388:	f022                	sd	s0,32(sp)
     *BOARD_PTR(uint32_t, a) = v;
-    800002ec:	b00007b7          	lui	a5,0xb0000
-    800002f0:	0087f437          	lui	s0,0x87f
+    8000038a:	b00007b7          	lui	a5,0xb0000
+    8000038e:	0087f437          	lui	s0,0x87f
 void qwen3_main(void) {
-    800002f4:	f406                	sd	ra,40(sp)
-    800002f6:	ec26                	sd	s1,24(sp)
-    800002f8:	e84a                	sd	s2,16(sp)
-    800002fa:	e44e                	sd	s3,8(sp)
-    800002fc:	e052                	sd	s4,0(sp)
+    80000392:	f406                	sd	ra,40(sp)
+    80000394:	ec26                	sd	s1,24(sp)
+    80000396:	e84a                	sd	s2,16(sp)
+    80000398:	e44e                	sd	s3,8(sp)
+    8000039a:	e052                	sd	s4,0(sp)
     *BOARD_PTR(uint32_t, a) = v;
-    800002fe:	0422                	slli	s0,s0,0x8
-    80000300:	07c1                	addi	a5,a5,16 # ffffffffb0000010 <_end+0xffffffff2ff9ebd0>
-    80000302:	c01c                	sw	a5,0(s0)
+    8000039c:	0422                	slli	s0,s0,0x8
+    8000039e:	07c1                	addi	a5,a5,16 # ffffffffb0000010 <_end+0xffffffff2ff9e9d0>
+    800003a0:	c01c                	sw	a5,0(s0)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    80000304:	0010702b          	l1d_clean_all
+    800003a2:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    80000308:	0330000f          	fence	rw,rw
+    800003a6:	0330000f          	fence	rw,rw
     *BOARD_PTR(uint32_t, uart_addr(idx)) = v;
-    8000030c:	20100737          	lui	a4,0x20100
-    80000310:	00072223          	sw	zero,4(a4) # 20100004 <_stack_size+0x200c0004>
-    80000314:	08000693          	li	a3,128
-    80000318:	c754                	sw	a3,12(a4)
-    8000031a:	4955                	li	s2,21
-    8000031c:	01272023          	sw	s2,0(a4)
-    80000320:	00072223          	sw	zero,4(a4)
-    80000324:	498d                	li	s3,3
-    80000326:	01372623          	sw	s3,12(a4)
-    8000032a:	44ad                	li	s1,11
-    8000032c:	87ba                	mv	a5,a4
-    8000032e:	0c972023          	sw	s1,192(a4)
-    80000332:	471d                	li	a4,7
-    80000334:	c798                	sw	a4,8(a5)
+    800003aa:	20100737          	lui	a4,0x20100
+    800003ae:	00072223          	sw	zero,4(a4) # 20100004 <_stack_size+0x200c0004>
+    800003b2:	08000693          	li	a3,128
+    800003b6:	c754                	sw	a3,12(a4)
+    800003b8:	4915                	li	s2,5
+    800003ba:	01272023          	sw	s2,0(a4)
+    800003be:	00072223          	sw	zero,4(a4)
+    800003c2:	498d                	li	s3,3
+    800003c4:	01372623          	sw	s3,12(a4)
+    800003c8:	449d                	li	s1,7
+    800003ca:	0c972023          	sw	s1,192(a4)
+    800003ce:	c704                	sw	s1,8(a4)
     /* ---- 步骤 1：能执行到这里，说明复位放开、取指正常、DDR 可写 ---- */
     mb_set(MB_STATUS, ST_BOOT);
 
     /* ---- 步骤 2：串口 ---- */
     uart_init();
     P("\n\n=== S2C BRINGUP (" BOARD_NAME ") ===\n");
-    80000336:	00001517          	auipc	a0,0x1
-    8000033a:	ad250513          	addi	a0,a0,-1326 # 80000e08 <msg_hint+0x1a0>
-    8000033e:	dd5ff0ef          	jal	80000112 <P>
+    800003d0:	00001517          	auipc	a0,0x1
+    800003d4:	bf050513          	addi	a0,a0,-1040 # 80000fc0 <msg_hint+0x1e0>
+    800003d8:	d43ff0ef          	jal	8000011a <P>
     P("build "); X(BOARD_BUILD_ID); P("   (0xMMDDhhmm)\n");
-    80000342:	00001517          	auipc	a0,0x1
-    80000346:	aee50513          	addi	a0,a0,-1298 # 80000e30 <msg_hint+0x1c8>
-    8000034a:	dc9ff0ef          	jal	80000112 <P>
-    8000034e:	08251537          	lui	a0,0x8251
-    80000352:	60150513          	addi	a0,a0,1537 # 8251601 <_stack_size+0x8211601>
-    80000356:	e17ff0ef          	jal	8000016c <X>
-    8000035a:	00001517          	auipc	a0,0x1
-    8000035e:	ade50513          	addi	a0,a0,-1314 # 80000e38 <msg_hint+0x1d0>
-    80000362:	db1ff0ef          	jal	80000112 <P>
+    800003dc:	00001517          	auipc	a0,0x1
+    800003e0:	c0c50513          	addi	a0,a0,-1012 # 80000fe8 <msg_hint+0x208>
+    800003e4:	d37ff0ef          	jal	8000011a <P>
+    800003e8:	08261537          	lui	a0,0x8261
+    800003ec:	94450513          	addi	a0,a0,-1724 # 8260944 <_stack_size+0x8220944>
+    800003f0:	d85ff0ef          	jal	80000174 <X>
+    800003f4:	00001517          	auipc	a0,0x1
+    800003f8:	bfc50513          	addi	a0,a0,-1028 # 80000ff0 <msg_hint+0x210>
+    800003fc:	d1fff0ef          	jal	8000011a <P>
     *BOARD_PTR(uint32_t, a) = v;
-    80000366:	08251737          	lui	a4,0x8251
-    8000036a:	60170713          	addi	a4,a4,1537 # 8251601 <_stack_size+0x8211601>
-    8000036e:	d418                	sw	a4,40(s0)
+    80000400:	08261737          	lui	a4,0x8261
+    80000404:	94470713          	addi	a4,a4,-1724 # 8260944 <_stack_size+0x8220944>
+    80000408:	d418                	sw	a4,40(s0)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    80000370:	0010702b          	l1d_clean_all
+    8000040a:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    80000374:	0330000f          	fence	rw,rw
+    8000040e:	0330000f          	fence	rw,rw
     P("-- 本镜像编译时假定的板级配置（请与实际硬件核对）--\n");
-    80000378:	00001517          	auipc	a0,0x1
-    8000037c:	ad850513          	addi	a0,a0,-1320 # 80000e50 <msg_hint+0x1e8>
-    80000380:	d93ff0ef          	jal	80000112 <P>
+    80000412:	00001517          	auipc	a0,0x1
+    80000416:	bf650513          	addi	a0,a0,-1034 # 80001008 <msg_hint+0x228>
+    8000041a:	d01ff0ef          	jal	8000011a <P>
     P("  DRAM      "); X(BOARD_DRAM_BASE); P(" .. "); X(BOARD_DRAM_END); P("\n");
-    80000384:	00001517          	auipc	a0,0x1
-    80000388:	b1c50513          	addi	a0,a0,-1252 # 80000ea0 <msg_hint+0x238>
-    8000038c:	d87ff0ef          	jal	80000112 <P>
-    80000390:	4505                	li	a0,1
-    80000392:	057e                	slli	a0,a0,0x1f
-    80000394:	dd9ff0ef          	jal	8000016c <X>
-    80000398:	00001517          	auipc	a0,0x1
-    8000039c:	b1850513          	addi	a0,a0,-1256 # 80000eb0 <msg_hint+0x248>
-    800003a0:	d73ff0ef          	jal	80000112 <P>
-    800003a4:	453d                	li	a0,15
-    800003a6:	0572                	slli	a0,a0,0x1c
-    800003a8:	157d                	addi	a0,a0,-1
-    800003aa:	dc3ff0ef          	jal	8000016c <X>
-    800003ae:	00001517          	auipc	a0,0x1
-    800003b2:	b0a50513          	addi	a0,a0,-1270 # 80000eb8 <msg_hint+0x250>
-    800003b6:	d5dff0ef          	jal	80000112 <P>
+    8000041e:	00001517          	auipc	a0,0x1
+    80000422:	c3a50513          	addi	a0,a0,-966 # 80001058 <msg_hint+0x278>
+    80000426:	cf5ff0ef          	jal	8000011a <P>
+    8000042a:	4505                	li	a0,1
+    8000042c:	057e                	slli	a0,a0,0x1f
+    8000042e:	d47ff0ef          	jal	80000174 <X>
+    80000432:	00001517          	auipc	a0,0x1
+    80000436:	c3650513          	addi	a0,a0,-970 # 80001068 <msg_hint+0x288>
+    8000043a:	ce1ff0ef          	jal	8000011a <P>
+    8000043e:	453d                	li	a0,15
+    80000440:	0572                	slli	a0,a0,0x1c
+    80000442:	157d                	addi	a0,a0,-1
+    80000444:	d31ff0ef          	jal	80000174 <X>
+    80000448:	00001517          	auipc	a0,0x1
+    8000044c:	c2850513          	addi	a0,a0,-984 # 80001070 <msg_hint+0x290>
+    80000450:	ccbff0ef          	jal	8000011a <P>
     P("  mailbox   "); X(BOARD_MBOX_ADDR); P("\n");
-    800003ba:	00001517          	auipc	a0,0x1
-    800003be:	b0650513          	addi	a0,a0,-1274 # 80000ec0 <msg_hint+0x258>
-    800003c2:	d51ff0ef          	jal	80000112 <P>
-    800003c6:	8522                	mv	a0,s0
-    800003c8:	da5ff0ef          	jal	8000016c <X>
-    800003cc:	00001517          	auipc	a0,0x1
-    800003d0:	aec50513          	addi	a0,a0,-1300 # 80000eb8 <msg_hint+0x250>
-    800003d4:	d3fff0ef          	jal	80000112 <P>
+    80000454:	00001517          	auipc	a0,0x1
+    80000458:	c2450513          	addi	a0,a0,-988 # 80001078 <msg_hint+0x298>
+    8000045c:	cbfff0ef          	jal	8000011a <P>
+    80000460:	8522                	mv	a0,s0
+    80000462:	d13ff0ef          	jal	80000174 <X>
+    80000466:	00001517          	auipc	a0,0x1
+    8000046a:	c0a50513          	addi	a0,a0,-1014 # 80001070 <msg_hint+0x290>
+    8000046e:	cadff0ef          	jal	8000011a <P>
     P("  权重      "); X(BOARD_WEIGHTS_ADDR);
-    800003d8:	00001517          	auipc	a0,0x1
-    800003dc:	af850513          	addi	a0,a0,-1288 # 80000ed0 <msg_hint+0x268>
-    800003e0:	d33ff0ef          	jal	80000112 <P>
-    800003e4:	4545                	li	a0,17
-    800003e6:	056e                	slli	a0,a0,0x1b
-    800003e8:	d85ff0ef          	jal	8000016c <X>
+    80000472:	00001517          	auipc	a0,0x1
+    80000476:	c1650513          	addi	a0,a0,-1002 # 80001088 <msg_hint+0x2a8>
+    8000047a:	ca1ff0ef          	jal	8000011a <P>
+    8000047e:	4545                	li	a0,17
+    80000480:	056e                	slli	a0,a0,0x1b
+    80000482:	cf3ff0ef          	jal	80000174 <X>
     P("   分词器 "); X(BOARD_TOKENIZER_ADDR); P("\n");
-    800003ec:	00001517          	auipc	a0,0x1
-    800003f0:	af450513          	addi	a0,a0,-1292 # 80000ee0 <msg_hint+0x278>
-    800003f4:	d1fff0ef          	jal	80000112 <P>
-    800003f8:	4535                	li	a0,13
-    800003fa:	0572                	slli	a0,a0,0x1c
-    800003fc:	d71ff0ef          	jal	8000016c <X>
-    80000400:	00001517          	auipc	a0,0x1
-    80000404:	ab850513          	addi	a0,a0,-1352 # 80000eb8 <msg_hint+0x250>
-    80000408:	d0bff0ef          	jal	80000112 <P>
+    80000486:	00001517          	auipc	a0,0x1
+    8000048a:	c1250513          	addi	a0,a0,-1006 # 80001098 <msg_hint+0x2b8>
+    8000048e:	c8dff0ef          	jal	8000011a <P>
+    80000492:	4535                	li	a0,13
+    80000494:	0572                	slli	a0,a0,0x1c
+    80000496:	cdfff0ef          	jal	80000174 <X>
+    8000049a:	00001517          	auipc	a0,0x1
+    8000049e:	bd650513          	addi	a0,a0,-1066 # 80001070 <msg_hint+0x290>
+    800004a2:	c79ff0ef          	jal	8000011a <P>
     P("  UART      "); X(BOARD_UART_BASE);
-    8000040c:	00001517          	auipc	a0,0x1
-    80000410:	ae450513          	addi	a0,a0,-1308 # 80000ef0 <msg_hint+0x288>
-    80000414:	cffff0ef          	jal	80000112 <P>
-    80000418:	20100537          	lui	a0,0x20100
-    8000041c:	d51ff0ef          	jal	8000016c <X>
+    800004a6:	00001517          	auipc	a0,0x1
+    800004aa:	c0250513          	addi	a0,a0,-1022 # 800010a8 <msg_hint+0x2c8>
+    800004ae:	c6dff0ef          	jal	8000011a <P>
+    800004b2:	20100537          	lui	a0,0x20100
+    800004b6:	cbfff0ef          	jal	80000174 <X>
     P("  "); U(BOARD_UART_32BIT ? 32 : 8); P("bit  shift=");
-    80000420:	00001517          	auipc	a0,0x1
-    80000424:	ae050513          	addi	a0,a0,-1312 # 80000f00 <msg_hint+0x298>
-    80000428:	cebff0ef          	jal	80000112 <P>
-    8000042c:	02000513          	li	a0,32
-    80000430:	ddfff0ef          	jal	8000020e <U>
-    80000434:	00001517          	auipc	a0,0x1
-    80000438:	ad450513          	addi	a0,a0,-1324 # 80000f08 <msg_hint+0x2a0>
-    8000043c:	cd7ff0ef          	jal	80000112 <P>
+    800004ba:	00001517          	auipc	a0,0x1
+    800004be:	ace50513          	addi	a0,a0,-1330 # 80000f88 <msg_hint+0x1a8>
+    800004c2:	c59ff0ef          	jal	8000011a <P>
+    800004c6:	02000513          	li	a0,32
+    800004ca:	d4dff0ef          	jal	80000216 <U>
+    800004ce:	00001517          	auipc	a0,0x1
+    800004d2:	bea50513          	addi	a0,a0,-1046 # 800010b8 <msg_hint+0x2d8>
+    800004d6:	c45ff0ef          	jal	8000011a <P>
     U(BOARD_UART_REG_SHIFT); P("  div="); U(BOARD_UART_DIVISOR);
-    80000440:	4509                	li	a0,2
-    80000442:	dcdff0ef          	jal	8000020e <U>
-    80000446:	00001517          	auipc	a0,0x1
-    8000044a:	ad250513          	addi	a0,a0,-1326 # 80000f18 <msg_hint+0x2b0>
-    8000044e:	cc5ff0ef          	jal	80000112 <P>
-    80000452:	854a                	mv	a0,s2
-    80000454:	dbbff0ef          	jal	8000020e <U>
+    800004da:	4509                	li	a0,2
+    800004dc:	d3bff0ef          	jal	80000216 <U>
+    800004e0:	00001517          	auipc	a0,0x1
+    800004e4:	be850513          	addi	a0,a0,-1048 # 800010c8 <msg_hint+0x2e8>
+    800004e8:	c33ff0ef          	jal	8000011a <P>
+    800004ec:	854a                	mv	a0,s2
+    800004ee:	d29ff0ef          	jal	80000216 <U>
     P("+"); U(BOARD_UART_DLF_VAL); P("/"); U(1u << BOARD_UART_DLF_BITS);
-    80000458:	00001517          	auipc	a0,0x1
-    8000045c:	ac850513          	addi	a0,a0,-1336 # 80000f20 <msg_hint+0x2b8>
-    80000460:	cb3ff0ef          	jal	80000112 <P>
-    80000464:	8526                	mv	a0,s1
-    80000466:	da9ff0ef          	jal	8000020e <U>
-    8000046a:	00001517          	auipc	a0,0x1
-    8000046e:	abe50513          	addi	a0,a0,-1346 # 80000f28 <msg_hint+0x2c0>
-    80000472:	ca1ff0ef          	jal	80000112 <P>
-    80000476:	4541                	li	a0,16
-    80000478:	d97ff0ef          	jal	8000020e <U>
+    800004f2:	00001517          	auipc	a0,0x1
+    800004f6:	bde50513          	addi	a0,a0,-1058 # 800010d0 <msg_hint+0x2f0>
+    800004fa:	c21ff0ef          	jal	8000011a <P>
+    800004fe:	8526                	mv	a0,s1
+    80000500:	d17ff0ef          	jal	80000216 <U>
+    80000504:	00001517          	auipc	a0,0x1
+    80000508:	bd450513          	addi	a0,a0,-1068 # 800010d8 <msg_hint+0x2f8>
+    8000050c:	c0fff0ef          	jal	8000011a <P>
+    80000510:	4541                	li	a0,16
+    80000512:	d05ff0ef          	jal	80000216 <U>
     P("\n");
-    8000047c:	00001517          	auipc	a0,0x1
-    80000480:	a3c50513          	addi	a0,a0,-1476 # 80000eb8 <msg_hint+0x250>
-    80000484:	c8fff0ef          	jal	80000112 <P>
+    80000516:	00001517          	auipc	a0,0x1
+    8000051a:	b5a50513          	addi	a0,a0,-1190 # 80001070 <msg_hint+0x290>
+    8000051e:	bfdff0ef          	jal	8000011a <P>
     P("  CPU       "); U(BOARD_CPU_HZ); P(" Hz\n");
-    80000488:	00001517          	auipc	a0,0x1
-    8000048c:	aa850513          	addi	a0,a0,-1368 # 80000f30 <msg_hint+0x2c8>
-    80000490:	c83ff0ef          	jal	80000112 <P>
-    80000494:	02626537          	lui	a0,0x2626
-    80000498:	a0050513          	addi	a0,a0,-1536 # 2625a00 <_stack_size+0x25e5a00>
-    8000049c:	d73ff0ef          	jal	8000020e <U>
-    800004a0:	00001517          	auipc	a0,0x1
-    800004a4:	aa050513          	addi	a0,a0,-1376 # 80000f40 <msg_hint+0x2d8>
-    800004a8:	c6bff0ef          	jal	80000112 <P>
+    80000522:	00001517          	auipc	a0,0x1
+    80000526:	bbe50513          	addi	a0,a0,-1090 # 800010e0 <msg_hint+0x300>
+    8000052a:	bf1ff0ef          	jal	8000011a <P>
+    8000052e:	02626537          	lui	a0,0x2626
+    80000532:	a0050513          	addi	a0,a0,-1536 # 2625a00 <_stack_size+0x25e5a00>
+    80000536:	ce1ff0ef          	jal	80000216 <U>
+    8000053a:	00001517          	auipc	a0,0x1
+    8000053e:	bb650513          	addi	a0,a0,-1098 # 800010f0 <msg_hint+0x310>
+    80000542:	bd9ff0ef          	jal	8000011a <P>
     P("  cacheline "); U(BOARD_CACHE_LINE); P(" B");
-    800004ac:	00001517          	auipc	a0,0x1
-    800004b0:	a9c50513          	addi	a0,a0,-1380 # 80000f48 <msg_hint+0x2e0>
-    800004b4:	c5fff0ef          	jal	80000112 <P>
-    800004b8:	04000513          	li	a0,64
-    800004bc:	d53ff0ef          	jal	8000020e <U>
-    800004c0:	00001517          	auipc	a0,0x1
-    800004c4:	a9850513          	addi	a0,a0,-1384 # 80000f58 <msg_hint+0x2f0>
-    800004c8:	c4bff0ef          	jal	80000112 <P>
+    80000546:	00001517          	auipc	a0,0x1
+    8000054a:	bb250513          	addi	a0,a0,-1102 # 800010f8 <msg_hint+0x318>
+    8000054e:	bcdff0ef          	jal	8000011a <P>
+    80000552:	04000513          	li	a0,64
+    80000556:	cc1ff0ef          	jal	80000216 <U>
+    8000055a:	00001517          	auipc	a0,0x1
+    8000055e:	bae50513          	addi	a0,a0,-1106 # 80001108 <msg_hint+0x328>
+    80000562:	bb9ff0ef          	jal	8000011a <P>
     P("   L1D "); U(BOARD_L1D_BYTES); P(" B");
-    800004cc:	00001517          	auipc	a0,0x1
-    800004d0:	a9450513          	addi	a0,a0,-1388 # 80000f60 <msg_hint+0x2f8>
-    800004d4:	c3fff0ef          	jal	80000112 <P>
-    800004d8:	6521                	lui	a0,0x8
-    800004da:	d35ff0ef          	jal	8000020e <U>
-    800004de:	00001517          	auipc	a0,0x1
-    800004e2:	a7a50513          	addi	a0,a0,-1414 # 80000f58 <msg_hint+0x2f0>
-    800004e6:	c2dff0ef          	jal	80000112 <P>
+    80000566:	00001517          	auipc	a0,0x1
+    8000056a:	baa50513          	addi	a0,a0,-1110 # 80001110 <msg_hint+0x330>
+    8000056e:	badff0ef          	jal	8000011a <P>
+    80000572:	6521                	lui	a0,0x8
+    80000574:	ca3ff0ef          	jal	80000216 <U>
+    80000578:	00001517          	auipc	a0,0x1
+    8000057c:	b9050513          	addi	a0,a0,-1136 # 80001108 <msg_hint+0x328>
+    80000580:	b9bff0ef          	jal	8000011a <P>
     P("\n");
-    800004ea:	00001517          	auipc	a0,0x1
-    800004ee:	9ce50513          	addi	a0,a0,-1586 # 80000eb8 <msg_hint+0x250>
-    800004f2:	c21ff0ef          	jal	80000112 <P>
+    80000584:	00001517          	auipc	a0,0x1
+    80000588:	aec50513          	addi	a0,a0,-1300 # 80001070 <msg_hint+0x290>
+    8000058c:	b8fff0ef          	jal	8000011a <P>
     mb_set(MB_BUILD_ID, BOARD_BUILD_ID);
     print_board_config();
     P("step1 boot        OK   (mailbox @ "); X(BOARD_MBOX_ADDR); P(")\n");
-    800004f6:	00001517          	auipc	a0,0x1
-    800004fa:	a7250513          	addi	a0,a0,-1422 # 80000f68 <msg_hint+0x300>
-    800004fe:	c15ff0ef          	jal	80000112 <P>
-    80000502:	8522                	mv	a0,s0
-    80000504:	c69ff0ef          	jal	8000016c <X>
-    80000508:	00001517          	auipc	a0,0x1
-    8000050c:	a8850513          	addi	a0,a0,-1400 # 80000f90 <msg_hint+0x328>
-    80000510:	c03ff0ef          	jal	80000112 <P>
+    80000590:	00001517          	auipc	a0,0x1
+    80000594:	b8850513          	addi	a0,a0,-1144 # 80001118 <msg_hint+0x338>
+    80000598:	b83ff0ef          	jal	8000011a <P>
+    8000059c:	8522                	mv	a0,s0
+    8000059e:	bd7ff0ef          	jal	80000174 <X>
+    800005a2:	00001517          	auipc	a0,0x1
+    800005a6:	b9e50513          	addi	a0,a0,-1122 # 80001140 <msg_hint+0x360>
+    800005aa:	b71ff0ef          	jal	8000011a <P>
     P("step2 uart        OK   (base "); X(BOARD_UART_BASE); P(")\n");
-    80000514:	00001517          	auipc	a0,0x1
-    80000518:	a8450513          	addi	a0,a0,-1404 # 80000f98 <msg_hint+0x330>
-    8000051c:	bf7ff0ef          	jal	80000112 <P>
-    80000520:	20100537          	lui	a0,0x20100
-    80000524:	c49ff0ef          	jal	8000016c <X>
-    80000528:	00001517          	auipc	a0,0x1
-    8000052c:	a6850513          	addi	a0,a0,-1432 # 80000f90 <msg_hint+0x328>
-    80000530:	be3ff0ef          	jal	80000112 <P>
+    800005ae:	00001517          	auipc	a0,0x1
+    800005b2:	b9a50513          	addi	a0,a0,-1126 # 80001148 <msg_hint+0x368>
+    800005b6:	b65ff0ef          	jal	8000011a <P>
+    800005ba:	20100537          	lui	a0,0x20100
+    800005be:	bb7ff0ef          	jal	80000174 <X>
+    800005c2:	00001517          	auipc	a0,0x1
+    800005c6:	b7e50513          	addi	a0,a0,-1154 # 80001140 <msg_hint+0x360>
+    800005ca:	b51ff0ef          	jal	8000011a <P>
     *BOARD_PTR(uint32_t, a) = v;
-    80000534:	b00007b7          	lui	a5,0xb0000
-    80000538:	02078793          	addi	a5,a5,32 # ffffffffb0000020 <_end+0xffffffff2ff9ebe0>
-    8000053c:	c01c                	sw	a5,0(s0)
+    800005ce:	b00007b7          	lui	a5,0xb0000
+    800005d2:	02078793          	addi	a5,a5,32 # ffffffffb0000020 <_end+0xffffffff2ff9e9e0>
+    800005d6:	c01c                	sw	a5,0(s0)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    8000053e:	0010702b          	l1d_clean_all
+    800005d8:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    80000542:	0330000f          	fence	rw,rw
+    800005dc:	0330000f          	fence	rw,rw
     BOARD_DCACHE_FLUSH((void *)a, sizeof(uint32_t));
-    80000546:	0010702b          	l1d_clean_all
-    8000054a:	0020702b          	l1d_inv_all
+    800005e0:	0010702b          	l1d_clean_all
+    800005e4:	0020702b          	l1d_inv_all
     BOARD_FENCE();
-    8000054e:	0330000f          	fence	rw,rw
+    800005e8:	0330000f          	fence	rw,rw
     return *BOARD_PTR(uint32_t, a);
-    80000552:	08042903          	lw	s2,128(s0) # 87f080 <_stack_size+0x83f080>
-    80000556:	08040493          	addi	s1,s0,128
-    8000055a:	2901                	sext.w	s2,s2
+    800005ec:	08042903          	lw	s2,128(s0) # 87f080 <_stack_size+0x83f080>
+    800005f0:	08040493          	addi	s1,s0,128
+    800005f4:	2901                	sext.w	s2,s2
     *BOARD_PTR(uint32_t, a) = v;
-    8000055c:	09242223          	sw	s2,132(s0)
+    800005f6:	09242223          	sw	s2,132(s0)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    80000560:	0010702b          	l1d_clean_all
+    800005fa:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    80000564:	0330000f          	fence	rw,rw
+    800005fe:	0330000f          	fence	rw,rw
 
     /* ---- 步骤 3：回读 host 预置的 magic，反证 PCIe 写 DDR 生效 ---- */
     uint32_t got = mb_get(MB_HOST_MAGIC);
     mb_set(MB_HOST_ECHO, got);
     P("step3 pcie magic  ");
     if (got == HOST_MAGIC) {
-    80000568:	5a5aca37          	lui	s4,0x5a5ac
+    80000602:	5a5aca37          	lui	s4,0x5a5ac
     P("step3 pcie magic  ");
-    8000056c:	00001517          	auipc	a0,0x1
-    80000570:	a4c50513          	addi	a0,a0,-1460 # 80000fb8 <msg_hint+0x350>
+    80000606:	00001517          	auipc	a0,0x1
+    8000060a:	b6250513          	addi	a0,a0,-1182 # 80001168 <msg_hint+0x388>
     if (got == HOST_MAGIC) {
-    80000574:	3c3a0a13          	addi	s4,s4,963 # 5a5ac3c3 <_stack_size+0x5a56c3c3>
+    8000060e:	3c3a0a13          	addi	s4,s4,963 # 5a5ac3c3 <_stack_size+0x5a56c3c3>
     P("step3 pcie magic  ");
-    80000578:	b9bff0ef          	jal	80000112 <P>
+    80000612:	b09ff0ef          	jal	8000011a <P>
     if (got == HOST_MAGIC) {
-    8000057c:	0d490463          	beq	s2,s4,80000644 <qwen3_main+0x35c>
+    80000616:	0d490463          	beq	s2,s4,800006de <qwen3_main+0x358>
         P("OK   ("); X(got); P(")\n");
         mb_set(MB_STATUS, ST_PCIE);
     } else {
         /* 不直接停机：后面几步与 PCIe 无关，继续跑能一次收集到更多信息。
          * host 侧看 MB_HOST_ECHO 就知道实际读到的是什么。 */
         P("MISMATCH  期望 "); X(HOST_MAGIC); P("  实际 "); X(got); P("\n");
-    80000580:	00001517          	auipc	a0,0x1
-    80000584:	a5850513          	addi	a0,a0,-1448 # 80000fd8 <msg_hint+0x370>
-    80000588:	b8bff0ef          	jal	80000112 <P>
-    8000058c:	8552                	mv	a0,s4
-    8000058e:	bdfff0ef          	jal	8000016c <X>
-    80000592:	00001517          	auipc	a0,0x1
-    80000596:	a5e50513          	addi	a0,a0,-1442 # 80000ff0 <msg_hint+0x388>
-    8000059a:	b79ff0ef          	jal	80000112 <P>
-    8000059e:	02091513          	slli	a0,s2,0x20
-    800005a2:	9101                	srli	a0,a0,0x20
-    800005a4:	bc9ff0ef          	jal	8000016c <X>
-    800005a8:	00001517          	auipc	a0,0x1
-    800005ac:	91050513          	addi	a0,a0,-1776 # 80000eb8 <msg_hint+0x250>
-    800005b0:	b63ff0ef          	jal	80000112 <P>
+    8000061a:	00001517          	auipc	a0,0x1
+    8000061e:	b6e50513          	addi	a0,a0,-1170 # 80001188 <msg_hint+0x3a8>
+    80000622:	af9ff0ef          	jal	8000011a <P>
+    80000626:	8552                	mv	a0,s4
+    80000628:	b4dff0ef          	jal	80000174 <X>
+    8000062c:	00001517          	auipc	a0,0x1
+    80000630:	b7450513          	addi	a0,a0,-1164 # 800011a0 <msg_hint+0x3c0>
+    80000634:	ae7ff0ef          	jal	8000011a <P>
+    80000638:	02091513          	slli	a0,s2,0x20
+    8000063c:	9101                	srli	a0,a0,0x20
+    8000063e:	b37ff0ef          	jal	80000174 <X>
+    80000642:	00001517          	auipc	a0,0x1
+    80000646:	a2e50513          	addi	a0,a0,-1490 # 80001070 <msg_hint+0x290>
+    8000064a:	ad1ff0ef          	jal	8000011a <P>
         P("      => host 是否在放开复位前往 "); X(MB_HOST_MAGIC); P(" 写过 magic？\n");
-    800005b4:	00001517          	auipc	a0,0x1
-    800005b8:	a4c50513          	addi	a0,a0,-1460 # 80001000 <msg_hint+0x398>
-    800005bc:	b57ff0ef          	jal	80000112 <P>
-    800005c0:	8526                	mv	a0,s1
-    800005c2:	babff0ef          	jal	8000016c <X>
-    800005c6:	00001517          	auipc	a0,0x1
-    800005ca:	a6a50513          	addi	a0,a0,-1430 # 80001030 <msg_hint+0x3c8>
-    800005ce:	b45ff0ef          	jal	80000112 <P>
+    8000064e:	00001517          	auipc	a0,0x1
+    80000652:	b6250513          	addi	a0,a0,-1182 # 800011b0 <msg_hint+0x3d0>
+    80000656:	ac5ff0ef          	jal	8000011a <P>
+    8000065a:	8526                	mv	a0,s1
+    8000065c:	b19ff0ef          	jal	80000174 <X>
+    80000660:	00001517          	auipc	a0,0x1
+    80000664:	b8050513          	addi	a0,a0,-1152 # 800011e0 <msg_hint+0x400>
+    80000668:	ab3ff0ef          	jal	8000011a <P>
         mark_fail(3);
-    800005d2:	854e                	mv	a0,s3
-    800005d4:	bf9ff0ef          	jal	800001cc <mark_fail>
+    8000066c:	854e                	mv	a0,s3
+    8000066e:	b67ff0ef          	jal	800001d4 <mark_fail>
     }
 
     /* ---- 步骤 4：RVV ---- */
     unsigned long vlenb;
     __asm__ volatile("csrr %0, vlenb" : "=r"(vlenb));
-    800005d8:	c2202473          	csrr	s0,vlenb
+    80000672:	c2202473          	csrr	s0,vlenb
     *BOARD_PTR(uint32_t, a) = v;
-    800005dc:	0087f7b7          	lui	a5,0x87f
-    800005e0:	07a2                	slli	a5,a5,0x8
+    80000676:	0087f7b7          	lui	a5,0x87f
+    8000067a:	07a2                	slli	a5,a5,0x8
     mb_set(MB_VLENB, (uint32_t)vlenb);
-    800005e2:	0004069b          	sext.w	a3,s0
+    8000067c:	0004069b          	sext.w	a3,s0
     *BOARD_PTR(uint32_t, a) = v;
-    800005e6:	0087f737          	lui	a4,0x87f
-    800005ea:	c3d4                	sw	a3,4(a5)
-    800005ec:	00871493          	slli	s1,a4,0x8
+    80000680:	0087f737          	lui	a4,0x87f
+    80000684:	c3d4                	sw	a3,4(a5)
+    80000686:	00871493          	slli	s1,a4,0x8
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    800005f0:	0010702b          	l1d_clean_all
+    8000068a:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    800005f4:	0330000f          	fence	rw,rw
+    8000068e:	0330000f          	fence	rw,rw
     P("step4 rvv vlenb   ");
-    800005f8:	00001517          	auipc	a0,0x1
-    800005fc:	a5050513          	addi	a0,a0,-1456 # 80001048 <msg_hint+0x3e0>
-    80000600:	b13ff0ef          	jal	80000112 <P>
+    80000692:	00001517          	auipc	a0,0x1
+    80000696:	b6650513          	addi	a0,a0,-1178 # 800011f8 <msg_hint+0x418>
+    8000069a:	a81ff0ef          	jal	8000011a <P>
     U(vlenb); P(" bytes (VLEN="); U(vlenb * 8); P(" bit)");
-    80000604:	8522                	mv	a0,s0
-    80000606:	c09ff0ef          	jal	8000020e <U>
-    8000060a:	00001517          	auipc	a0,0x1
-    8000060e:	a5650513          	addi	a0,a0,-1450 # 80001060 <msg_hint+0x3f8>
-    80000612:	b01ff0ef          	jal	80000112 <P>
-    80000616:	00341513          	slli	a0,s0,0x3
-    8000061a:	bf5ff0ef          	jal	8000020e <U>
-    8000061e:	00001517          	auipc	a0,0x1
-    80000622:	a5250513          	addi	a0,a0,-1454 # 80001070 <msg_hint+0x408>
-    80000626:	aedff0ef          	jal	80000112 <P>
+    8000069e:	8522                	mv	a0,s0
+    800006a0:	b77ff0ef          	jal	80000216 <U>
+    800006a4:	00001517          	auipc	a0,0x1
+    800006a8:	b6c50513          	addi	a0,a0,-1172 # 80001210 <msg_hint+0x430>
+    800006ac:	a6fff0ef          	jal	8000011a <P>
+    800006b0:	00341513          	slli	a0,s0,0x3
+    800006b4:	b63ff0ef          	jal	80000216 <U>
+    800006b8:	00001517          	auipc	a0,0x1
+    800006bc:	b6850513          	addi	a0,a0,-1176 # 80001220 <msg_hint+0x440>
+    800006c0:	a5bff0ef          	jal	8000011a <P>
     if (vlenb != 128) { P("  ★ 期望 128\n"); fail(4); }
-    8000062a:	08000793          	li	a5,128
-    8000062e:	04f40463          	beq	s0,a5,80000676 <qwen3_main+0x38e>
-    80000632:	00001517          	auipc	a0,0x1
-    80000636:	a4650513          	addi	a0,a0,-1466 # 80001078 <msg_hint+0x410>
-    8000063a:	ad9ff0ef          	jal	80000112 <P>
-    8000063e:	4511                	li	a0,4
-    80000640:	c7dff0ef          	jal	800002bc <fail>
+    800006c4:	08000793          	li	a5,128
+    800006c8:	04f40463          	beq	s0,a5,80000710 <qwen3_main+0x38a>
+    800006cc:	00001517          	auipc	a0,0x1
+    800006d0:	b5c50513          	addi	a0,a0,-1188 # 80001228 <msg_hint+0x448>
+    800006d4:	a47ff0ef          	jal	8000011a <P>
+    800006d8:	4511                	li	a0,4
+    800006da:	bebff0ef          	jal	800002c4 <fail>
         P("OK   ("); X(got); P(")\n");
-    80000644:	00001517          	auipc	a0,0x1
-    80000648:	98c50513          	addi	a0,a0,-1652 # 80000fd0 <msg_hint+0x368>
-    8000064c:	ac7ff0ef          	jal	80000112 <P>
-    80000650:	854a                	mv	a0,s2
-    80000652:	b1bff0ef          	jal	8000016c <X>
-    80000656:	00001517          	auipc	a0,0x1
-    8000065a:	93a50513          	addi	a0,a0,-1734 # 80000f90 <msg_hint+0x328>
-    8000065e:	ab5ff0ef          	jal	80000112 <P>
+    800006de:	00001517          	auipc	a0,0x1
+    800006e2:	aa250513          	addi	a0,a0,-1374 # 80001180 <msg_hint+0x3a0>
+    800006e6:	a35ff0ef          	jal	8000011a <P>
+    800006ea:	854a                	mv	a0,s2
+    800006ec:	a89ff0ef          	jal	80000174 <X>
+    800006f0:	00001517          	auipc	a0,0x1
+    800006f4:	a5050513          	addi	a0,a0,-1456 # 80001140 <msg_hint+0x360>
+    800006f8:	a23ff0ef          	jal	8000011a <P>
     *BOARD_PTR(uint32_t, a) = v;
-    80000662:	b00007b7          	lui	a5,0xb0000
-    80000666:	03078793          	addi	a5,a5,48 # ffffffffb0000030 <_end+0xffffffff2ff9ebf0>
-    8000066a:	c01c                	sw	a5,0(s0)
+    800006fc:	b00007b7          	lui	a5,0xb0000
+    80000700:	03078793          	addi	a5,a5,48 # ffffffffb0000030 <_end+0xffffffff2ff9e9f0>
+    80000704:	c01c                	sw	a5,0(s0)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    8000066c:	0010702b          	l1d_clean_all
+    80000706:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    80000670:	0330000f          	fence	rw,rw
+    8000070a:	0330000f          	fence	rw,rw
 }
-    80000674:	b795                	j	800005d8 <qwen3_main+0x2f0>
+    8000070e:	b795                	j	80000672 <qwen3_main+0x2ec>
     P("   OK\n");
-    80000676:	00001517          	auipc	a0,0x1
-    8000067a:	a1a50513          	addi	a0,a0,-1510 # 80001090 <msg_hint+0x428>
-    8000067e:	a95ff0ef          	jal	80000112 <P>
+    80000710:	00001517          	auipc	a0,0x1
+    80000714:	b3050513          	addi	a0,a0,-1232 # 80001240 <msg_hint+0x460>
+    80000718:	a03ff0ef          	jal	8000011a <P>
     *BOARD_PTR(uint32_t, a) = v;
-    80000682:	b00007b7          	lui	a5,0xb0000
-    80000686:	04078793          	addi	a5,a5,64 # ffffffffb0000040 <_end+0xffffffff2ff9ec00>
-    8000068a:	c09c                	sw	a5,0(s1)
+    8000071c:	b00007b7          	lui	a5,0xb0000
+    80000720:	04078793          	addi	a5,a5,64 # ffffffffb0000040 <_end+0xffffffff2ff9ea00>
+    80000724:	c09c                	sw	a5,0(s1)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    8000068c:	0010702b          	l1d_clean_all
+    80000726:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    80000690:	0330000f          	fence	rw,rw
+    8000072a:	0330000f          	fence	rw,rw
     mb_set(MB_STATUS, ST_RVV);
 
     /* ---- 步骤 5：AME 最小 GEMM ---- */
     unsigned long cap;
     __asm__ volatile("csrr %0, 0x803" : "=r"(cap));   /* 回读 mtilem，核对配置 */
-    80000694:	80302773          	csrr	a4,mtilem
+    8000072e:	80302773          	csrr	a4,mtilem
     *BOARD_PTR(uint32_t, a) = v;
-    80000698:	0087f7b7          	lui	a5,0x87f
-    8000069c:	07a2                	slli	a5,a5,0x8
+    80000732:	0087f7b7          	lui	a5,0x87f
+    80000736:	07a2                	slli	a5,a5,0x8
     mb_set(MB_MTILE_CAP, (uint32_t)cap);
-    8000069e:	2701                	sext.w	a4,a4
+    80000738:	2701                	sext.w	a4,a4
     *BOARD_PTR(uint32_t, a) = v;
-    800006a0:	cf98                	sw	a4,24(a5)
+    8000073a:	cf98                	sw	a4,24(a5)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    800006a2:	0010702b          	l1d_clean_all
+    8000073c:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    800006a6:	0330000f          	fence	rw,rw
+    80000740:	0330000f          	fence	rw,rw
     for (int i = 0; i < 32; i++) { g_a[i] = 0x3F80; g_b[i] = 0x3F80; }
-    800006aa:	6791                	lui	a5,0x4
-    800006ac:	f807879b          	addiw	a5,a5,-128 # 3f80 <__jvt_base$+0x3f80>
-    800006b0:	cc847057          	vsetivli	zero,8,e16,m1,ta,ma
-    800006b4:	5e07c0d7          	vmv.v.x	v1,a5
-    800006b8:	0001d717          	auipc	a4,0x1d
-    800006bc:	d0870713          	addi	a4,a4,-760 # 8001d3c0 <g_b>
-    800006c0:	0001f797          	auipc	a5,0x1f
-    800006c4:	d4078793          	addi	a5,a5,-704 # 8001f400 <g_a>
-    800006c8:	0001f697          	auipc	a3,0x1f
-    800006cc:	d7868693          	addi	a3,a3,-648 # 8001f440 <g_a+0x40>
-    800006d0:	0207d0a7          	vse16.v	v1,(a5)
-    800006d4:	020750a7          	vse16.v	v1,(a4)
-    800006d8:	07c1                	addi	a5,a5,16
-    800006da:	0741                	addi	a4,a4,16
-    800006dc:	fed79ae3          	bne	a5,a3,800006d0 <qwen3_main+0x3e8>
+    80000744:	6791                	lui	a5,0x4
+    80000746:	f807879b          	addiw	a5,a5,-128 # 3f80 <__jvt_base$+0x3f80>
+    8000074a:	cc847057          	vsetivli	zero,8,e16,m1,ta,ma
+    8000074e:	5e07c0d7          	vmv.v.x	v1,a5
+    80000752:	0001d717          	auipc	a4,0x1d
+    80000756:	e6e70713          	addi	a4,a4,-402 # 8001d5c0 <g_b>
+    8000075a:	0001f797          	auipc	a5,0x1f
+    8000075e:	ea678793          	addi	a5,a5,-346 # 8001f600 <g_a>
+    80000762:	0001f697          	auipc	a3,0x1f
+    80000766:	ede68693          	addi	a3,a3,-290 # 8001f640 <g_a+0x40>
+    8000076a:	0207d0a7          	vse16.v	v1,(a5)
+    8000076e:	020750a7          	vse16.v	v1,(a4)
+    80000772:	07c1                	addi	a5,a5,16
+    80000774:	0741                	addi	a4,a4,16
+    80000776:	fef69ae3          	bne	a3,a5,8000076a <qwen3_main+0x3e4>
     g_c[0] = -1.0f;             /* 哨兵：msce32 若没写，读回来就是它 */
-    800006e0:	00001797          	auipc	a5,0x1
-    800006e4:	c347a787          	flw	fa5,-972(a5) # 80001314 <msg_hint+0x6ac>
-    800006e8:	0001b417          	auipc	s0,0x1b
-    800006ec:	c9840413          	addi	s0,s0,-872 # 8001b380 <g_c>
-    800006f0:	00f42027          	fsw	fa5,0(s0)
+    8000077a:	00001797          	auipc	a5,0x1
+    8000077e:	dba7a787          	flw	fa5,-582(a5) # 80001534 <msg_hint+0x754>
+    80000782:	0001b417          	auipc	s0,0x1b
+    80000786:	dfe40413          	addi	s0,s0,-514 # 8001b580 <g_c>
+    8000078a:	00f42027          	fsw	fa5,0(s0)
     BOARD_DCACHE_CLEAN(g_a, 32 * sizeof g_a[0]);
-    800006f4:	0010702b          	l1d_clean_all
+    8000078e:	0010702b          	l1d_clean_all
     BOARD_DCACHE_CLEAN(g_b, 32 * sizeof g_b[0]);
-    800006f8:	0010702b          	l1d_clean_all
+    80000792:	0010702b          	l1d_clean_all
     BOARD_DCACHE_FLUSH(g_c, sizeof g_c[0]);
-    800006fc:	0010702b          	l1d_clean_all
-    80000700:	0020702b          	l1d_inv_all
+    80000796:	0010702b          	l1d_clean_all
+    8000079a:	0020702b          	l1d_inv_all
     BOARD_FENCE();
-    80000704:	0330000f          	fence	rw,rw
+    8000079e:	0330000f          	fence	rw,rw
     __asm__ volatile("csrw 0x803, %0" :: "r"(m));
-    80000708:	4785                	li	a5,1
-    8000070a:	80379073          	csrw	mtilem,a5
+    800007a2:	4785                	li	a5,1
+    800007a4:	80379073          	csrw	mtilem,a5
     __asm__ volatile("csrw 0x804, %0" :: "r"(n));
-    8000070e:	80479073          	csrw	mtilen,a5
+    800007a8:	80479073          	csrw	mtilen,a5
     __asm__ volatile("csrw 0x805, %0" :: "r"(k));
-    80000712:	02000793          	li	a5,32
-    80000716:	80579073          	csrw	mtilek,a5
+    800007ac:	02000793          	li	a5,32
+    800007b0:	80579073          	csrw	mtilek,a5
     __asm__ volatile("mzero acc0");
-    8000071a:	0c00020b          	mzero	acc0
+    800007b4:	0c00020b          	mzero	acc0
     { register const void *p __asm__("a0") = g_a; register long s __asm__("a1") = 64;
-    8000071e:	0001f517          	auipc	a0,0x1f
-    80000722:	ce250513          	addi	a0,a0,-798 # 8001f400 <g_a>
-    80000726:	04000593          	li	a1,64
+    800007b8:	0001f517          	auipc	a0,0x1f
+    800007bc:	e4850513          	addi	a0,a0,-440 # 8001f600 <g_a>
+    800007c0:	04000593          	li	a1,64
       __asm__ volatile("mlae16 tr0,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
-    8000072a:	04b5040b          	mlae16	tr0,(a0),a1
+    800007c4:	04b5040b          	mlae16	tr0,(a0),a1
     { register const void *p __asm__("a0") = g_b; register long s __asm__("a1") = 64;
-    8000072e:	0001d517          	auipc	a0,0x1d
-    80000732:	c9250513          	addi	a0,a0,-878 # 8001d3c0 <g_b>
+    800007c8:	0001d517          	auipc	a0,0x1d
+    800007cc:	df850513          	addi	a0,a0,-520 # 8001d5c0 <g_b>
       __asm__ volatile("mlbe16 tr1,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
-    80000736:	14b5048b          	mlbe16	tr1,(a0),a1
+    800007d0:	14b5048b          	mlbe16	tr1,(a0),a1
     __asm__ volatile("mfmacc.s.bf16 acc0,tr1,tr0");
-    8000073a:	0a140a0b          	mfmacc.s.bf16	acc0,tr1,tr0
+    800007d4:	0a140a0b          	mfmacc.s.bf16	acc0,tr1,tr0
     { register void *p __asm__("a0") = g_c; register long s __asm__("a1") = 4;
-    8000073e:	4591                	li	a1,4
-    80000740:	8522                	mv	a0,s0
+    800007d8:	4591                	li	a1,4
+    800007da:	8522                	mv	a0,s0
       __asm__ volatile("msce32 acc0,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
-    80000742:	26b50a0b          	msce32	acc0,(a0),a1
+    800007dc:	26b50a0b          	msce32	acc0,(a0),a1
     __asm__ volatile("mrelease");
-    80000746:	0000000b          	mrelease
+    800007e0:	0000000b          	mrelease
     BOARD_FENCE();
-    8000074a:	0330000f          	fence	rw,rw
+    800007e4:	0330000f          	fence	rw,rw
     { union { float f; uint32_t u; } r; r.f = g_c[0]; g_ame_raw = r.u; }
-    8000074e:	0001b797          	auipc	a5,0x1b
-    80000752:	c327a783          	lw	a5,-974(a5) # 8001b380 <g_c>
-    80000756:	00001717          	auipc	a4,0x1
-    8000075a:	bef72723          	sw	a5,-1042(a4) # 80001344 <g_ame_raw>
+    800007e8:	0001b797          	auipc	a5,0x1b
+    800007ec:	d987a783          	lw	a5,-616(a5) # 8001b580 <g_c>
+    800007f0:	00001717          	auipc	a4,0x1
+    800007f4:	d4f72a23          	sw	a5,-684(a4) # 80001544 <g_ame_raw>
     BOARD_DCACHE_INVAL(g_c, sizeof g_c[0]);
-    8000075e:	0010702b          	l1d_clean_all
-    80000762:	0020702b          	l1d_inv_all
+    800007f8:	0010702b          	l1d_clean_all
+    800007fc:	0020702b          	l1d_inv_all
     BOARD_FENCE();
-    80000766:	0330000f          	fence	rw,rw
+    80000800:	0330000f          	fence	rw,rw
     union { float f; uint32_t u; } v; v.f = g_c[0];
-    8000076a:	0001b497          	auipc	s1,0x1b
-    8000076e:	c164a483          	lw	s1,-1002(s1) # 8001b380 <g_c>
+    80000804:	0001b497          	auipc	s1,0x1b
+    80000808:	d7c4a483          	lw	s1,-644(s1) # 8001b580 <g_c>
     *BOARD_PTR(uint32_t, a) = v;
-    80000772:	0087f7b7          	lui	a5,0x87f
-    80000776:	07a2                	slli	a5,a5,0x8
-    80000778:	0087f737          	lui	a4,0x87f
-    8000077c:	c784                	sw	s1,8(a5)
-    8000077e:	00871913          	slli	s2,a4,0x8
+    8000080c:	0087f7b7          	lui	a5,0x87f
+    80000810:	07a2                	slli	a5,a5,0x8
+    80000812:	0087f737          	lui	a4,0x87f
+    80000816:	c784                	sw	s1,8(a5)
+    80000818:	00871913          	slli	s2,a4,0x8
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    80000782:	0010702b          	l1d_clean_all
+    8000081c:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    80000786:	0330000f          	fence	rw,rw
+    80000820:	0330000f          	fence	rw,rw
 
     uint32_t r = ame_selftest();
     mb_set(MB_AME_RESULT, r);
     mb_set(MB_AME_RAW, g_ame_raw);
-    8000078a:	00001717          	auipc	a4,0x1
-    8000078e:	bba72703          	lw	a4,-1094(a4) # 80001344 <g_ame_raw>
+    80000824:	00001717          	auipc	a4,0x1
+    80000828:	d2072703          	lw	a4,-736(a4) # 80001544 <g_ame_raw>
     *BOARD_PTR(uint32_t, a) = v;
-    80000792:	02e92023          	sw	a4,32(s2)
+    8000082c:	02e92023          	sw	a4,32(s2)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    80000796:	0010702b          	l1d_clean_all
+    80000830:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    8000079a:	0330000f          	fence	rw,rw
+    80000834:	0330000f          	fence	rw,rw
     mb_set(MB_C_ADDR, (uint32_t)(uintptr_t)g_c);
-    8000079e:	0004071b          	sext.w	a4,s0
+    80000838:	0004071b          	sext.w	a4,s0
     *BOARD_PTR(uint32_t, a) = v;
-    800007a2:	02e92223          	sw	a4,36(s2)
+    8000083c:	02e92223          	sw	a4,36(s2)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    800007a6:	0010702b          	l1d_clean_all
+    80000840:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    800007aa:	0330000f          	fence	rw,rw
+    80000844:	0330000f          	fence	rw,rw
     P("step5 ame 1x1x32  "); X(r);
-    800007ae:	00001517          	auipc	a0,0x1
-    800007b2:	8ea50513          	addi	a0,a0,-1814 # 80001098 <msg_hint+0x430>
-    800007b6:	95dff0ef          	jal	80000112 <P>
-    800007ba:	02049513          	slli	a0,s1,0x20
-    800007be:	9101                	srli	a0,a0,0x20
-    800007c0:	9adff0ef          	jal	8000016c <X>
+    80000848:	00001517          	auipc	a0,0x1
+    8000084c:	a0050513          	addi	a0,a0,-1536 # 80001248 <msg_hint+0x468>
+    80000850:	8cbff0ef          	jal	8000011a <P>
+    80000854:	02049513          	slli	a0,s1,0x20
+    80000858:	9101                	srli	a0,a0,0x20
+    8000085a:	91bff0ef          	jal	80000174 <X>
     if (r != 0x42000000u) {
-    800007c4:	420007b7          	lui	a5,0x42000
-    800007c8:	04f48c63          	beq	s1,a5,80000820 <qwen3_main+0x538>
+    8000085e:	420007b7          	lui	a5,0x42000
+    80000862:	04f48c63          	beq	s1,a5,800008ba <qwen3_main+0x534>
         P("  * 期望 0x42000000 (=32.0f)\n");
-    800007cc:	00001517          	auipc	a0,0x1
-    800007d0:	8e450513          	addi	a0,a0,-1820 # 800010b0 <msg_hint+0x448>
-    800007d4:	93fff0ef          	jal	80000112 <P>
+    80000866:	00001517          	auipc	a0,0x1
+    8000086a:	9fa50513          	addi	a0,a0,-1542 # 80001260 <msg_hint+0x480>
+    8000086e:	8adff0ef          	jal	8000011a <P>
         P("      同步前读到 ");
-    800007d8:	00001517          	auipc	a0,0x1
-    800007dc:	8f850513          	addi	a0,a0,-1800 # 800010d0 <msg_hint+0x468>
-    800007e0:	933ff0ef          	jal	80000112 <P>
+    80000872:	00001517          	auipc	a0,0x1
+    80000876:	a0e50513          	addi	a0,a0,-1522 # 80001280 <msg_hint+0x4a0>
+    8000087a:	8a1ff0ef          	jal	8000011a <P>
         X(g_ame_raw);
-    800007e4:	00001517          	auipc	a0,0x1
-    800007e8:	b6056503          	lwu	a0,-1184(a0) # 80001344 <g_ame_raw>
-    800007ec:	981ff0ef          	jal	8000016c <X>
+    8000087e:	00001517          	auipc	a0,0x1
+    80000882:	cc656503          	lwu	a0,-826(a0) # 80001544 <g_ame_raw>
+    80000886:	8efff0ef          	jal	80000174 <X>
         P("\n      结果缓冲 @ ");
-    800007f0:	00001517          	auipc	a0,0x1
-    800007f4:	8f850513          	addi	a0,a0,-1800 # 800010e8 <msg_hint+0x480>
-    800007f8:	91bff0ef          	jal	80000112 <P>
+    8000088a:	00001517          	auipc	a0,0x1
+    8000088e:	a0e50513          	addi	a0,a0,-1522 # 80001298 <msg_hint+0x4b8>
+    80000892:	889ff0ef          	jal	8000011a <P>
         X((unsigned long)(uintptr_t)g_c);
-    800007fc:	8522                	mv	a0,s0
-    800007fe:	96fff0ef          	jal	8000016c <X>
+    80000896:	8522                	mv	a0,s0
+    80000898:	8ddff0ef          	jal	80000174 <X>
         P("\n      两者都是 0xbf800000 则说明 msce32 没写进来；\n");
-    80000802:	00001517          	auipc	a0,0x1
-    80000806:	8fe50513          	addi	a0,a0,-1794 # 80001100 <msg_hint+0x498>
-    8000080a:	909ff0ef          	jal	80000112 <P>
+    8000089c:	00001517          	auipc	a0,0x1
+    800008a0:	a1450513          	addi	a0,a0,-1516 # 800012b0 <msg_hint+0x4d0>
+    800008a4:	877ff0ef          	jal	8000011a <P>
         P("      可让 host 经 PCIe 直读上面的地址，绕开 L1D 看 DDR 真值\n");
-    8000080e:	00001517          	auipc	a0,0x1
-    80000812:	93a50513          	addi	a0,a0,-1734 # 80001148 <msg_hint+0x4e0>
-    80000816:	8fdff0ef          	jal	80000112 <P>
+    800008a8:	00001517          	auipc	a0,0x1
+    800008ac:	a5050513          	addi	a0,a0,-1456 # 800012f8 <msg_hint+0x518>
+    800008b0:	86bff0ef          	jal	8000011a <P>
         fail(5);
-    8000081a:	4515                	li	a0,5
-    8000081c:	aa1ff0ef          	jal	800002bc <fail>
+    800008b4:	4515                	li	a0,5
+    800008b6:	a0fff0ef          	jal	800002c4 <fail>
     }
     P("  (=32.0f)   OK\n");
-    80000820:	00001517          	auipc	a0,0x1
-    80000824:	97850513          	addi	a0,a0,-1672 # 80001198 <msg_hint+0x530>
-    80000828:	8ebff0ef          	jal	80000112 <P>
+    800008ba:	00001517          	auipc	a0,0x1
+    800008be:	a8e50513          	addi	a0,a0,-1394 # 80001348 <msg_hint+0x568>
+    800008c2:	859ff0ef          	jal	8000011a <P>
     *BOARD_PTR(uint32_t, a) = v;
-    8000082c:	b00007b7          	lui	a5,0xb0000
-    80000830:	05078793          	addi	a5,a5,80 # ffffffffb0000050 <_end+0xffffffff2ff9ec10>
-    80000834:	00f92023          	sw	a5,0(s2)
+    800008c6:	b00007b7          	lui	a5,0xb0000
+    800008ca:	05078793          	addi	a5,a5,80 # ffffffffb0000050 <_end+0xffffffff2ff9ea10>
+    800008ce:	00f92023          	sw	a5,0(s2)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    80000838:	0010702b          	l1d_clean_all
+    800008d2:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    8000083c:	0330000f          	fence	rw,rw
+    800008d6:	0330000f          	fence	rw,rw
     mb_set(MB_STATUS, ST_AME);
 
 
     /* ---- 步骤 6：性能采样 ---- */
     P("step6 perf        采样 "); U(PERF_ITERS); P(" 次 128x128x32 ...\n");
-    80000840:	00001517          	auipc	a0,0x1
-    80000844:	97050513          	addi	a0,a0,-1680 # 800011b0 <msg_hint+0x548>
-    80000848:	8cbff0ef          	jal	80000112 <P>
-    8000084c:	3e800513          	li	a0,1000
-    80000850:	9bfff0ef          	jal	8000020e <U>
-    80000854:	00001517          	auipc	a0,0x1
-    80000858:	97c50513          	addi	a0,a0,-1668 # 800011d0 <msg_hint+0x568>
-    8000085c:	8b7ff0ef          	jal	80000112 <P>
+    800008da:	00001517          	auipc	a0,0x1
+    800008de:	a8650513          	addi	a0,a0,-1402 # 80001360 <msg_hint+0x580>
+    800008e2:	839ff0ef          	jal	8000011a <P>
+    800008e6:	3e800513          	li	a0,1000
+    800008ea:	92dff0ef          	jal	80000216 <U>
+    800008ee:	00001517          	auipc	a0,0x1
+    800008f2:	a9250513          	addi	a0,a0,-1390 # 80001380 <msg_hint+0x5a0>
+    800008f6:	825ff0ef          	jal	8000011a <P>
     for (int i = 0; i < 128 * 32; i++) { g_pa[i] = 0x3F80; g_pb[i] = 0x3F80; }
-    80000860:	6791                	lui	a5,0x4
-    80000862:	0c807757          	vsetvli	a4,zero,e16,m1,ta,ma
-    80000866:	f807879b          	addiw	a5,a5,-128 # 3f80 <__jvt_base$+0x3f80>
-    8000086a:	5e07c0d7          	vmv.v.x	v1,a5
+    800008fa:	6791                	lui	a5,0x4
+    800008fc:	0c807757          	vsetvli	a4,zero,e16,m1,ta,ma
+    80000900:	f807879b          	addiw	a5,a5,-128 # 3f80 <__jvt_base$+0x3f80>
+    80000904:	5e07c0d7          	vmv.v.x	v1,a5
     P("step6 perf        采样 "); U(PERF_ITERS); P(" 次 128x128x32 ...\n");
-    8000086e:	6605                	lui	a2,0x1
-    80000870:	00013697          	auipc	a3,0x13
-    80000874:	b1068693          	addi	a3,a3,-1264 # 80013380 <g_pb>
-    80000878:	00017717          	auipc	a4,0x17
-    8000087c:	b0870713          	addi	a4,a4,-1272 # 80017380 <g_pa>
-    80000880:	0c7677d7          	vsetvli	a5,a2,e8,mf2,ta,ma
+    80000908:	6605                	lui	a2,0x1
+    8000090a:	00013697          	auipc	a3,0x13
+    8000090e:	c7668693          	addi	a3,a3,-906 # 80013580 <g_pb>
+    80000912:	00017717          	auipc	a4,0x17
+    80000916:	c6e70713          	addi	a4,a4,-914 # 80017580 <g_pa>
+    8000091a:	0c7677d7          	vsetvli	a5,a2,e8,mf2,ta,ma
     for (int i = 0; i < 128 * 32; i++) { g_pa[i] = 0x3F80; g_pb[i] = 0x3F80; }
-    80000884:	020750a7          	vse16.v	v1,(a4)
-    80000888:	8e1d                	sub	a2,a2,a5
-    8000088a:	0786                	slli	a5,a5,0x1
-    8000088c:	973e                	add	a4,a4,a5
-    8000088e:	0206d0a7          	vse16.v	v1,(a3)
-    80000892:	96be                	add	a3,a3,a5
-    80000894:	f675                	bnez	a2,80000880 <qwen3_main+0x598>
+    8000091e:	020750a7          	vse16.v	v1,(a4)
+    80000922:	8e1d                	sub	a2,a2,a5
+    80000924:	0786                	slli	a5,a5,0x1
+    80000926:	973e                	add	a4,a4,a5
+    80000928:	0206d0a7          	vse16.v	v1,(a3)
+    8000092c:	96be                	add	a3,a3,a5
+    8000092e:	f675                	bnez	a2,8000091a <qwen3_main+0x594>
     BOARD_DCACHE_CLEAN(g_pa, 128 * 32 * sizeof g_pa[0]);
-    80000896:	0010702b          	l1d_clean_all
+    80000930:	0010702b          	l1d_clean_all
     BOARD_DCACHE_CLEAN(g_pb, 128 * 32 * sizeof g_pb[0]);
-    8000089a:	0010702b          	l1d_clean_all
+    80000934:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    8000089e:	0330000f          	fence	rw,rw
+    80000938:	0330000f          	fence	rw,rw
     __asm__ volatile("csrw 0x803, %0" :: "r"(m));
-    800008a2:	08000793          	li	a5,128
-    800008a6:	80379073          	csrw	mtilem,a5
+    8000093c:	08000793          	li	a5,128
+    80000940:	80379073          	csrw	mtilem,a5
     __asm__ volatile("csrw 0x804, %0" :: "r"(n));
-    800008aa:	80479073          	csrw	mtilen,a5
+    80000944:	80479073          	csrw	mtilen,a5
     __asm__ volatile("csrw 0x805, %0" :: "r"(k));
-    800008ae:	02000793          	li	a5,32
-    800008b2:	80579073          	csrw	mtilek,a5
+    80000948:	02000793          	li	a5,32
+    8000094c:	80579073          	csrw	mtilek,a5
     __asm__ volatile("mzero acc0");
-    800008b6:	0c00020b          	mzero	acc0
+    80000950:	0c00020b          	mzero	acc0
     __asm__ volatile("csrr %0, mcycle" : "=r"(v));
-    800008ba:	b0002773          	csrr	a4,mcycle
-    800008be:	3e800793          	li	a5,1000
+    80000954:	b0002773          	csrr	a4,mcycle
+    80000958:	3e800793          	li	a5,1000
         { register const void *p __asm__("a0") = g_pa; register long s __asm__("a1") = 64;
-    800008c2:	00017517          	auipc	a0,0x17
-    800008c6:	abe50513          	addi	a0,a0,-1346 # 80017380 <g_pa>
-    800008ca:	04000593          	li	a1,64
+    8000095c:	00017517          	auipc	a0,0x17
+    80000960:	c2450513          	addi	a0,a0,-988 # 80017580 <g_pa>
+    80000964:	04000593          	li	a1,64
           __asm__ volatile("mlae16 tr0,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
-    800008ce:	04b5040b          	mlae16	tr0,(a0),a1
+    80000968:	04b5040b          	mlae16	tr0,(a0),a1
         { register const void *p __asm__("a0") = g_pb; register long s __asm__("a1") = 64;
-    800008d2:	00013517          	auipc	a0,0x13
-    800008d6:	aae50513          	addi	a0,a0,-1362 # 80013380 <g_pb>
+    8000096c:	00013517          	auipc	a0,0x13
+    80000970:	c1450513          	addi	a0,a0,-1004 # 80013580 <g_pb>
           __asm__ volatile("mlbe16 tr1,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
-    800008da:	14b5048b          	mlbe16	tr1,(a0),a1
+    80000974:	14b5048b          	mlbe16	tr1,(a0),a1
         __asm__ volatile("mfmacc.s.bf16 acc0,tr1,tr0");
-    800008de:	0a140a0b          	mfmacc.s.bf16	acc0,tr1,tr0
+    80000978:	0a140a0b          	mfmacc.s.bf16	acc0,tr1,tr0
     for (int it = 0; it < PERF_ITERS; it++) {
-    800008e2:	37fd                	addiw	a5,a5,-1
-    800008e4:	fff9                	bnez	a5,800008c2 <qwen3_main+0x5da>
+    8000097c:	37fd                	addiw	a5,a5,-1
+    8000097e:	fff9                	bnez	a5,8000095c <qwen3_main+0x5d6>
     __asm__ volatile("csrr %0, mcycle" : "=r"(v));
-    800008e6:	b0002473          	csrr	s0,mcycle
+    80000980:	b0002473          	csrr	s0,mcycle
     { register void *p __asm__("a0") = g_pc; register long s __asm__("a1") = 128 * 4;
-    800008ea:	00001517          	auipc	a0,0x1
-    800008ee:	a9650513          	addi	a0,a0,-1386 # 80001380 <g_pc>
-    800008f2:	20000593          	li	a1,512
+    80000984:	00001517          	auipc	a0,0x1
+    80000988:	bfc50513          	addi	a0,a0,-1028 # 80001580 <g_pc>
+    8000098c:	20000593          	li	a1,512
       __asm__ volatile("msce32 acc0,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
-    800008f6:	26b50a0b          	msce32	acc0,(a0),a1
+    80000990:	26b50a0b          	msce32	acc0,(a0),a1
     __asm__ volatile("mrelease");
-    800008fa:	0000000b          	mrelease
+    80000994:	0000000b          	mrelease
     *BOARD_PTR(uint32_t, a) = v;
-    800008fe:	0087f7b7          	lui	a5,0x87f
+    80000998:	0087f7b7          	lui	a5,0x87f
     return t1 - t0;
-    80000902:	8c19                	sub	s0,s0,a4
+    8000099c:	8c19                	sub	s0,s0,a4
     *BOARD_PTR(uint32_t, a) = v;
-    80000904:	07a2                	slli	a5,a5,0x8
+    8000099e:	07a2                	slli	a5,a5,0x8
     uint64_t cyc = perf_sample();
     mb_set(MB_CYCLES_LO, (uint32_t)cyc);
-    80000906:	0004071b          	sext.w	a4,s0
+    800009a0:	0004071b          	sext.w	a4,s0
     *BOARD_PTR(uint32_t, a) = v;
-    8000090a:	c7d8                	sw	a4,12(a5)
+    800009a4:	c7d8                	sw	a4,12(a5)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    8000090c:	0010702b          	l1d_clean_all
+    800009a6:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    80000910:	0330000f          	fence	rw,rw
+    800009aa:	0330000f          	fence	rw,rw
     *BOARD_PTR(uint32_t, a) = v;
-    80000914:	0087f7b7          	lui	a5,0x87f
-    80000918:	07a2                	slli	a5,a5,0x8
+    800009ae:	0087f7b7          	lui	a5,0x87f
+    800009b2:	07a2                	slli	a5,a5,0x8
     mb_set(MB_CYCLES_HI, (uint32_t)(cyc >> 32));
-    8000091a:	42045713          	srai	a4,s0,0x20
+    800009b4:	42045713          	srai	a4,s0,0x20
     *BOARD_PTR(uint32_t, a) = v;
-    8000091e:	cb98                	sw	a4,16(a5)
+    800009b8:	cb98                	sw	a4,16(a5)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    80000920:	0010702b          	l1d_clean_all
+    800009ba:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    80000924:	0330000f          	fence	rw,rw
+    800009be:	0330000f          	fence	rw,rw
     *BOARD_PTR(uint32_t, a) = v;
-    80000928:	0087f7b7          	lui	a5,0x87f
-    8000092c:	07a2                	slli	a5,a5,0x8
-    8000092e:	3e800913          	li	s2,1000
-    80000932:	0127aa23          	sw	s2,20(a5) # 87f014 <_stack_size+0x83f014>
+    800009c2:	0087f7b7          	lui	a5,0x87f
+    800009c6:	07a2                	slli	a5,a5,0x8
+    800009c8:	3e800913          	li	s2,1000
+    800009cc:	0127aa23          	sw	s2,20(a5) # 87f014 <_stack_size+0x83f014>
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    80000936:	0010702b          	l1d_clean_all
+    800009d0:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    8000093a:	0330000f          	fence	rw,rw
+    800009d4:	0330000f          	fence	rw,rw
     mb_set(MB_ITERS, PERF_ITERS);
 
     P("      总周期 "); U((unsigned long)cyc);
-    8000093e:	00001517          	auipc	a0,0x1
-    80000942:	8aa50513          	addi	a0,a0,-1878 # 800011e8 <msg_hint+0x580>
-    80000946:	fccff0ef          	jal	80000112 <P>
-    8000094a:	8522                	mv	a0,s0
-    8000094c:	8c3ff0ef          	jal	8000020e <U>
+    800009d8:	00001517          	auipc	a0,0x1
+    800009dc:	9c050513          	addi	a0,a0,-1600 # 80001398 <msg_hint+0x5b8>
+    800009e0:	f3aff0ef          	jal	8000011a <P>
+    800009e4:	8522                	mv	a0,s0
+    800009e6:	831ff0ef          	jal	80000216 <U>
     P("   每次 "); U((unsigned long)(cyc / PERF_ITERS)); P(" 周期\n");
-    80000950:	00001517          	auipc	a0,0x1
-    80000954:	8b050513          	addi	a0,a0,-1872 # 80001200 <msg_hint+0x598>
-    80000958:	fbaff0ef          	jal	80000112 <P>
-    8000095c:	03245433          	divu	s0,s0,s2
+    800009ea:	00001517          	auipc	a0,0x1
+    800009ee:	9c650513          	addi	a0,a0,-1594 # 800013b0 <msg_hint+0x5d0>
+    800009f2:	f28ff0ef          	jal	8000011a <P>
+    800009f6:	03245433          	divu	s0,s0,s2
 #endif
 #if BOARD_CPU_HZ
     /* 用实测周期数外推 decode 一个 token 的时间。
      * 145500 = 28 层 × 3840 + lm_head 的 1187×32，M=1 的 mfmacc 总数。 */
     unsigned long per = (unsigned long)(cyc / PERF_ITERS);
     unsigned long ms  = (unsigned long)((145500ULL * per * 1000ULL) / BOARD_CPU_HZ);
-    80000960:	026264b7          	lui	s1,0x2626
-    80000964:	a0048493          	addi	s1,s1,-1536 # 2625a00 <_stack_size+0x25e5a00>
+    800009fa:	026264b7          	lui	s1,0x2626
+    800009fe:	a0048493          	addi	s1,s1,-1536 # 2625a00 <_stack_size+0x25e5a00>
     P("   每次 "); U((unsigned long)(cyc / PERF_ITERS)); P(" 周期\n");
-    80000968:	8522                	mv	a0,s0
-    8000096a:	8a5ff0ef          	jal	8000020e <U>
-    8000096e:	00001517          	auipc	a0,0x1
-    80000972:	8a250513          	addi	a0,a0,-1886 # 80001210 <msg_hint+0x5a8>
-    80000976:	f9cff0ef          	jal	80000112 <P>
+    80000a02:	8522                	mv	a0,s0
+    80000a04:	813ff0ef          	jal	80000216 <U>
+    80000a08:	00001517          	auipc	a0,0x1
+    80000a0c:	9b850513          	addi	a0,a0,-1608 # 800013c0 <msg_hint+0x5e0>
+    80000a10:	f0aff0ef          	jal	8000011a <P>
     unsigned long ms  = (unsigned long)((145500ULL * per * 1000ULL) / BOARD_CPU_HZ);
-    8000097a:	08ac27b7          	lui	a5,0x8ac2
-    8000097e:	76078793          	addi	a5,a5,1888 # 8ac2760 <_stack_size+0x8a82760>
-    80000982:	02f40433          	mul	s0,s0,a5
+    80000a14:	08ac27b7          	lui	a5,0x8ac2
+    80000a18:	76078793          	addi	a5,a5,1888 # 8ac2760 <_stack_size+0x8a82760>
+    80000a1c:	02f40433          	mul	s0,s0,a5
     P("      @ "); U(BOARD_CPU_HZ / 1000000); P(" MHz 外推：约 ");
-    80000986:	00001517          	auipc	a0,0x1
-    8000098a:	89a50513          	addi	a0,a0,-1894 # 80001220 <msg_hint+0x5b8>
-    8000098e:	f84ff0ef          	jal	80000112 <P>
-    80000992:	02800513          	li	a0,40
-    80000996:	879ff0ef          	jal	8000020e <U>
-    8000099a:	00001517          	auipc	a0,0x1
-    8000099e:	89650513          	addi	a0,a0,-1898 # 80001230 <msg_hint+0x5c8>
-    800009a2:	f70ff0ef          	jal	80000112 <P>
+    80000a20:	00001517          	auipc	a0,0x1
+    80000a24:	9b050513          	addi	a0,a0,-1616 # 800013d0 <msg_hint+0x5f0>
+    80000a28:	ef2ff0ef          	jal	8000011a <P>
+    80000a2c:	02800513          	li	a0,40
+    80000a30:	fe6ff0ef          	jal	80000216 <U>
+    80000a34:	00001517          	auipc	a0,0x1
+    80000a38:	9ac50513          	addi	a0,a0,-1620 # 800013e0 <msg_hint+0x600>
+    80000a3c:	edeff0ef          	jal	8000011a <P>
     unsigned long ms  = (unsigned long)((145500ULL * per * 1000ULL) / BOARD_CPU_HZ);
-    800009a6:	029454b3          	divu	s1,s0,s1
+    80000a40:	029454b3          	divu	s1,s0,s1
     U(ms); P(" ms/token");
-    800009aa:	8526                	mv	a0,s1
-    800009ac:	863ff0ef          	jal	8000020e <U>
-    800009b0:	00001517          	auipc	a0,0x1
-    800009b4:	89850513          	addi	a0,a0,-1896 # 80001248 <msg_hint+0x5e0>
-    800009b8:	f5aff0ef          	jal	80000112 <P>
+    80000a44:	8526                	mv	a0,s1
+    80000a46:	fd0ff0ef          	jal	80000216 <U>
+    80000a4a:	00001517          	auipc	a0,0x1
+    80000a4e:	9ae50513          	addi	a0,a0,-1618 # 800013f8 <msg_hint+0x618>
+    80000a52:	ec8ff0ef          	jal	8000011a <P>
     if (ms) { P("  ("); U(1000 / (ms ? ms : 1)); P(" token/s)"); }
-    800009bc:	026267b7          	lui	a5,0x2626
-    800009c0:	9ff78793          	addi	a5,a5,-1537 # 26259ff <_stack_size+0x25e59ff>
-    800009c4:	0e87e863          	bltu	a5,s0,80000ab4 <qwen3_main+0x7cc>
+    80000a56:	026267b7          	lui	a5,0x2626
+    80000a5a:	9ff78793          	addi	a5,a5,-1537 # 26259ff <_stack_size+0x25e59ff>
+    80000a5e:	1c87e763          	bltu	a5,s0,80000c2c <qwen3_main+0x8a6>
     P("\n");
-    800009c8:	00000517          	auipc	a0,0x0
-    800009cc:	4f050513          	addi	a0,a0,1264 # 80000eb8 <msg_hint+0x250>
-    800009d0:	f42ff0ef          	jal	80000112 <P>
+    80000a62:	00000517          	auipc	a0,0x0
+    80000a66:	60e50513          	addi	a0,a0,1550 # 80001070 <msg_hint+0x290>
+    80000a6a:	eb0ff0ef          	jal	8000011a <P>
 #endif
     if (!g_failmask) mb_set(MB_STATUS, ST_PERF);
-    800009d4:	00001497          	auipc	s1,0x1
-    800009d8:	96c4a483          	lw	s1,-1684(s1) # 80001340 <g_failmask>
-    800009dc:	e8b9                	bnez	s1,80000a32 <qwen3_main+0x74a>
+    80000a6e:	00001797          	auipc	a5,0x1
+    80000a72:	ad27a783          	lw	a5,-1326(a5) # 80001540 <g_failmask>
+    80000a76:	ef89                	bnez	a5,80000a90 <qwen3_main+0x70a>
     *BOARD_PTR(uint32_t, a) = v;
-    800009de:	0087f437          	lui	s0,0x87f
-    800009e2:	b00007b7          	lui	a5,0xb0000
-    800009e6:	0422                	slli	s0,s0,0x8
-    800009e8:	06078793          	addi	a5,a5,96 # ffffffffb0000060 <_end+0xffffffff2ff9ec20>
-    800009ec:	c01c                	sw	a5,0(s0)
+    80000a78:	0087f7b7          	lui	a5,0x87f
+    80000a7c:	b0000737          	lui	a4,0xb0000
+    80000a80:	07a2                	slli	a5,a5,0x8
+    80000a82:	06070713          	addi	a4,a4,96 # ffffffffb0000060 <_end+0xffffffff2ff9ea20>
+    80000a86:	c398                	sw	a4,0(a5)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    800009ee:	0010702b          	l1d_clean_all
+    80000a88:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    800009f2:	0330000f          	fence	rw,rw
+    80000a8c:	0330000f          	fence	rw,rw
+
+    /* ---- 步骤 7：内存带宽 ----
+     * 与 step6 互补：那边是"每次 tile 多少周期"，这边是绝对带宽，
+     * 可以直接和 DDR 理论峰值比，看出访存效率的量级。 */
+    P("step7 带宽        读 "); U(BW_BYTES >> 20); P(" MiB x2 ...\n");
+    80000a90:	00001517          	auipc	a0,0x1
+    80000a94:	99050513          	addi	a0,a0,-1648 # 80001420 <msg_hint+0x640>
+    80000a98:	e82ff0ef          	jal	8000011a <P>
+    80000a9c:	4511                	li	a0,4
+    80000a9e:	f78ff0ef          	jal	80000216 <U>
+    80000aa2:	00001517          	auipc	a0,0x1
+    80000aa6:	99e50513          	addi	a0,a0,-1634 # 80001440 <msg_hint+0x660>
+    80000aaa:	e70ff0ef          	jal	8000011a <P>
+    __asm__ volatile("csrw 0x803, %0" :: "r"(m));
+    80000aae:	08000793          	li	a5,128
+    80000ab2:	80379073          	csrw	mtilem,a5
+    __asm__ volatile("csrw 0x804, %0" :: "r"(n));
+    80000ab6:	80479073          	csrw	mtilen,a5
+    __asm__ volatile("csrw 0x805, %0" :: "r"(k));
+    80000aba:	02000793          	li	a5,32
+    80000abe:	80579073          	csrw	mtilek,a5
+    __asm__ volatile("csrr %0, mcycle" : "=r"(v));
+    80000ac2:	b00026f3          	csrr	a3,mcycle
+    80000ac6:	08100513          	li	a0,129
+    while (p + 8192 <= end) {
+    80000aca:	20500793          	li	a5,517
+    __asm__ volatile("csrr %0, mcycle" : "=r"(v));
+    80000ace:	0562                	slli	a0,a0,0x18
+    while (p + 8192 <= end) {
+    80000ad0:	07da                	slli	a5,a5,0x16
+    80000ad2:	6709                	lui	a4,0x2
+        register long st __asm__("a1") = 64;
+    80000ad4:	04000593          	li	a1,64
+        __asm__ volatile("mlae16 tr0,(%0),%1" :: "r"(q), "r"(st) : "memory");
+    80000ad8:	04b5040b          	mlae16	tr0,(a0),a1
+    while (p + 8192 <= end) {
+    80000adc:	953a                	add	a0,a0,a4
+    80000ade:	fef51be3          	bne	a0,a5,80000ad4 <qwen3_main+0x74e>
+    __asm__ volatile("mrelease");
+    80000ae2:	0000000b          	mrelease
+    __asm__ volatile("csrr %0, mcycle" : "=r"(v));
+    80000ae6:	b00025f3          	csrr	a1,mcycle
+    return rd_mcycle() - t0;
+    80000aea:	40d584b3          	sub	s1,a1,a3
+    __asm__ volatile("csrr %0, mcycle" : "=r"(v));
+    80000aee:	b00026f3          	csrr	a3,mcycle
+    __asm__ volatile("vsetvli t0, zero, e32, m8, ta, ma" ::: "t0");
+    80000af2:	0d3072d7          	vsetvli	t0,zero,e32,m8,ta,ma
+    80000af6:	08100793          	li	a5,129
+    while (p + 1024 <= end) {
+    80000afa:	20500713          	li	a4,517
+    __asm__ volatile("vsetvli t0, zero, e32, m8, ta, ma" ::: "t0");
+    80000afe:	07e2                	slli	a5,a5,0x18
+    while (p + 1024 <= end) {
+    80000b00:	075a                	slli	a4,a4,0x16
+        __asm__ volatile("vle32.v v0, (%0)" :: "r"(p) : "memory");
+    80000b02:	0207e007          	vle32.v	v0,(a5)
+    while (p + 1024 <= end) {
+    80000b06:	40078793          	addi	a5,a5,1024 # 87f400 <_stack_size+0x83f400>
+    80000b0a:	fee79ce3          	bne	a5,a4,80000b02 <qwen3_main+0x77c>
+    __asm__ volatile("csrr %0, mcycle" : "=r"(v));
+    80000b0e:	b0002473          	csrr	s0,mcycle
+    {
+        uint64_t ca = bw_ame_read();
+        uint64_t cr = bw_rvv_read();
+        print_gbps("      AME 装载(绕 L1D)", ca);
+    80000b12:	00001517          	auipc	a0,0x1
+    80000b16:	93e50513          	addi	a0,a0,-1730 # 80001450 <msg_hint+0x670>
+    80000b1a:	85a6                	mv	a1,s1
+    return rd_mcycle() - t0;
+    80000b1c:	8c15                	sub	s0,s0,a3
+        print_gbps("      AME 装载(绕 L1D)", ca);
+    80000b1e:	fd2ff0ef          	jal	800002f0 <print_gbps>
+        print_gbps("      RVV 读取(经 L1D)", cr);
+    80000b22:	85a2                	mv	a1,s0
+    80000b24:	00001517          	auipc	a0,0x1
+    80000b28:	94c50513          	addi	a0,a0,-1716 # 80001470 <msg_hint+0x690>
+    80000b2c:	fc4ff0ef          	jal	800002f0 <print_gbps>
+#if BOARD_CPU_HZ
+        mb_set(MB_BW_AME, (uint32_t)((uint64_t)BW_BYTES * BOARD_CPU_HZ
+                                     / (ca ? ca : 1) / 1000000u));
+    80000b30:	85a6                	mv	a1,s1
+    80000b32:	e091                	bnez	s1,80000b36 <qwen3_main+0x7b0>
+    80000b34:	4585                	li	a1,1
+    80000b36:	0a000737          	lui	a4,0xa000
+        mb_set(MB_BW_AME, (uint32_t)((uint64_t)BW_BYTES * BOARD_CPU_HZ
+    80000b3a:	02b75733          	divu	a4,a4,a1
+    *BOARD_PTR(uint32_t, a) = v;
+    80000b3e:	0087f7b7          	lui	a5,0x87f
+    80000b42:	07a2                	slli	a5,a5,0x8
+    80000b44:	d7d8                	sw	a4,44(a5)
+    BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
+    80000b46:	0010702b          	l1d_clean_all
+    BOARD_FENCE();
+    80000b4a:	0330000f          	fence	rw,rw
+        mb_set(MB_BW_RVV, (uint32_t)((uint64_t)BW_BYTES * BOARD_CPU_HZ
+                                     / (cr ? cr : 1) / 1000000u));
+    80000b4e:	85a2                	mv	a1,s0
+    80000b50:	e011                	bnez	s0,80000b54 <qwen3_main+0x7ce>
+    80000b52:	4585                	li	a1,1
+    80000b54:	0a000737          	lui	a4,0xa000
+        mb_set(MB_BW_RVV, (uint32_t)((uint64_t)BW_BYTES * BOARD_CPU_HZ
+    80000b58:	02b75733          	divu	a4,a4,a1
+    *BOARD_PTR(uint32_t, a) = v;
+    80000b5c:	0087f7b7          	lui	a5,0x87f
+    80000b60:	07a2                	slli	a5,a5,0x8
+    80000b62:	843e                	mv	s0,a5
+    80000b64:	db98                	sw	a4,48(a5)
+    BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
+    80000b66:	0010702b          	l1d_clean_all
+    BOARD_FENCE();
+    80000b6a:	0330000f          	fence	rw,rw
 
     /* ---- 裁决 ----
      * 必须看累计的 failmask，不能只看跑到了最后一步：
      * step3 是软失败（继续跑以便一次收齐信息），若在这里无条件报 ALL PASS，
      * 上板时会把"PCIe 没写进去"当成全部通过，是最坏的一种误导。 */
     if (g_failmask) {
-    800009f6:	00001497          	auipc	s1,0x1
-    800009fa:	94a4a483          	lw	s1,-1718(s1) # 80001340 <g_failmask>
-    800009fe:	e895                	bnez	s1,80000a32 <qwen3_main+0x74a>
+    80000b6e:	00001497          	auipc	s1,0x1
+    80000b72:	9d24a483          	lw	s1,-1582(s1) # 80001540 <g_failmask>
+    80000b76:	cc85                	beqz	s1,80000bae <qwen3_main+0x828>
+        P("\n>>> FAIL —— 以下步骤未通过：");
+    80000b78:	00001517          	auipc	a0,0x1
+    80000b7c:	91850513          	addi	a0,a0,-1768 # 80001490 <msg_hint+0x6b0>
+    80000b80:	4405                	li	s0,1
+    80000b82:	d98ff0ef          	jal	8000011a <P>
+        for (int i = 1; i <= 6; i++)
+            if (g_failmask & (1u << i)) { P(" step"); U((unsigned long)i); }
+    80000b86:	89a2                	mv	s3,s0
+        for (int i = 1; i <= 6; i++)
+    80000b88:	491d                	li	s2,7
+    80000b8a:	a021                	j	80000b92 <qwen3_main+0x80c>
+    80000b8c:	0405                	addi	s0,s0,1
+    80000b8e:	05240963          	beq	s0,s2,80000be0 <qwen3_main+0x85a>
+            if (g_failmask & (1u << i)) { P(" step"); U((unsigned long)i); }
+    80000b92:	008997bb          	sllw	a5,s3,s0
+    80000b96:	8fe5                	and	a5,a5,s1
+    80000b98:	dbf5                	beqz	a5,80000b8c <qwen3_main+0x806>
+    80000b9a:	00001517          	auipc	a0,0x1
+    80000b9e:	92650513          	addi	a0,a0,-1754 # 800014c0 <msg_hint+0x6e0>
+    80000ba2:	d78ff0ef          	jal	8000011a <P>
+    80000ba6:	8522                	mv	a0,s0
+    80000ba8:	e6eff0ef          	jal	80000216 <U>
+    80000bac:	b7c5                	j	80000b8c <qwen3_main+0x806>
         *BOARD_PTR(uint32_t, BOARD_POWEROFF_ADDR) = BOARD_POWEROFF_FAIL;
 #endif
         for (;;) { }
     }
 
     P("\n>>> ALL PASS —— 基础通路全通，可以进 L1（AME 向量包）\n");
-    80000a00:	00001517          	auipc	a0,0x1
-    80000a04:	8c850513          	addi	a0,a0,-1848 # 800012c8 <msg_hint+0x660>
-    80000a08:	f0aff0ef          	jal	80000112 <P>
+    80000bae:	00001517          	auipc	a0,0x1
+    80000bb2:	93a50513          	addi	a0,a0,-1734 # 800014e8 <msg_hint+0x708>
+    80000bb6:	d64ff0ef          	jal	8000011a <P>
     *BOARD_PTR(uint32_t, a) = v;
-    80000a0c:	0087f7b7          	lui	a5,0x87f
-    80000a10:	07a2                	slli	a5,a5,0x8
-    80000a12:	0007ae23          	sw	zero,28(a5) # 87f01c <_stack_size+0x83f01c>
+    80000bba:	0087f7b7          	lui	a5,0x87f
+    80000bbe:	07a2                	slli	a5,a5,0x8
+    80000bc0:	0007ae23          	sw	zero,28(a5) # 87f01c <_stack_size+0x83f01c>
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    80000a16:	0010702b          	l1d_clean_all
+    80000bc4:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    80000a1a:	0330000f          	fence	rw,rw
+    80000bc8:	0330000f          	fence	rw,rw
     *BOARD_PTR(uint32_t, a) = v;
-    80000a1e:	b00007b7          	lui	a5,0xb0000
-    80000a22:	0aa78793          	addi	a5,a5,170 # ffffffffb00000aa <_end+0xffffffff2ff9ec6a>
-    80000a26:	c01c                	sw	a5,0(s0)
+    80000bcc:	b00007b7          	lui	a5,0xb0000
+    80000bd0:	0aa78793          	addi	a5,a5,170 # ffffffffb00000aa <_end+0xffffffff2ff9ea6a>
+    80000bd4:	c01c                	sw	a5,0(s0)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    80000a28:	0010702b          	l1d_clean_all
+    80000bd6:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    80000a2c:	0330000f          	fence	rw,rw
+    80000bda:	0330000f          	fence	rw,rw
     mb_set(MB_FAILMASK, 0);
     mb_set(MB_STATUS, ST_ALLPASS);
 #if BOARD_HAS_POWEROFF
     *BOARD_PTR(uint32_t, BOARD_POWEROFF_ADDR) = BOARD_POWEROFF_PASS;
 #endif
     for (;;) { }
-    80000a30:	a001                	j	80000a30 <qwen3_main+0x748>
-        P("\n>>> FAIL —— 以下步骤未通过：");
-    80000a32:	00001517          	auipc	a0,0x1
-    80000a36:	83e50513          	addi	a0,a0,-1986 # 80001270 <msg_hint+0x608>
-    80000a3a:	4405                	li	s0,1
-    80000a3c:	ed6ff0ef          	jal	80000112 <P>
-            if (g_failmask & (1u << i)) { P(" step"); U((unsigned long)i); }
-    80000a40:	89a2                	mv	s3,s0
-        for (int i = 1; i <= 6; i++)
-    80000a42:	491d                	li	s2,7
-    80000a44:	a021                	j	80000a4c <qwen3_main+0x764>
-    80000a46:	0405                	addi	s0,s0,1 # 87f001 <_stack_size+0x83f001>
-    80000a48:	03240063          	beq	s0,s2,80000a68 <qwen3_main+0x780>
-            if (g_failmask & (1u << i)) { P(" step"); U((unsigned long)i); }
-    80000a4c:	008997bb          	sllw	a5,s3,s0
-    80000a50:	8fe5                	and	a5,a5,s1
-    80000a52:	dbf5                	beqz	a5,80000a46 <qwen3_main+0x75e>
-    80000a54:	00001517          	auipc	a0,0x1
-    80000a58:	84c50513          	addi	a0,a0,-1972 # 800012a0 <msg_hint+0x638>
-    80000a5c:	eb6ff0ef          	jal	80000112 <P>
-    80000a60:	8522                	mv	a0,s0
-    80000a62:	facff0ef          	jal	8000020e <U>
-    80000a66:	b7c5                	j	80000a46 <qwen3_main+0x75e>
+    80000bde:	a001                	j	80000bde <qwen3_main+0x858>
         P("\n    failmask "); X(g_failmask);
-    80000a68:	00001517          	auipc	a0,0x1
-    80000a6c:	84050513          	addi	a0,a0,-1984 # 800012a8 <msg_hint+0x640>
-    80000a70:	ea2ff0ef          	jal	80000112 <P>
-    80000a74:	02049513          	slli	a0,s1,0x20
-    80000a78:	9101                	srli	a0,a0,0x20
-    80000a7a:	ef2ff0ef          	jal	8000016c <X>
+    80000be0:	00001517          	auipc	a0,0x1
+    80000be4:	8e850513          	addi	a0,a0,-1816 # 800014c8 <msg_hint+0x6e8>
+    80000be8:	d32ff0ef          	jal	8000011a <P>
+    80000bec:	02049513          	slli	a0,s1,0x20
+    80000bf0:	9101                	srli	a0,a0,0x20
+    80000bf2:	d82ff0ef          	jal	80000174 <X>
         P("  (mailbox "); X(MB_FAILMASK); P(")\n");
-    80000a7e:	00001517          	auipc	a0,0x1
-    80000a82:	83a50513          	addi	a0,a0,-1990 # 800012b8 <msg_hint+0x650>
-    80000a86:	e8cff0ef          	jal	80000112 <P>
-    80000a8a:	0087f537          	lui	a0,0x87f
-    80000a8e:	0522                	slli	a0,a0,0x8
-    80000a90:	0571                	addi	a0,a0,28 # 87f01c <_stack_size+0x83f01c>
-    80000a92:	edaff0ef          	jal	8000016c <X>
-    80000a96:	00000517          	auipc	a0,0x0
-    80000a9a:	4fa50513          	addi	a0,a0,1274 # 80000f90 <msg_hint+0x328>
-    80000a9e:	e74ff0ef          	jal	80000112 <P>
+    80000bf6:	00001517          	auipc	a0,0x1
+    80000bfa:	8e250513          	addi	a0,a0,-1822 # 800014d8 <msg_hint+0x6f8>
+    80000bfe:	d1cff0ef          	jal	8000011a <P>
+    80000c02:	0087f537          	lui	a0,0x87f
+    80000c06:	0522                	slli	a0,a0,0x8
+    80000c08:	0571                	addi	a0,a0,28 # 87f01c <_stack_size+0x83f01c>
+    80000c0a:	d6aff0ef          	jal	80000174 <X>
+    80000c0e:	00000517          	auipc	a0,0x0
+    80000c12:	53250513          	addi	a0,a0,1330 # 80001140 <msg_hint+0x360>
+    80000c16:	d04ff0ef          	jal	8000011a <P>
     *BOARD_PTR(uint32_t, a) = v;
-    80000aa2:	0087f7b7          	lui	a5,0x87f
-    80000aa6:	07a2                	slli	a5,a5,0x8
-    80000aa8:	cfc4                	sw	s1,28(a5)
+    80000c1a:	0087f7b7          	lui	a5,0x87f
+    80000c1e:	07a2                	slli	a5,a5,0x8
+    80000c20:	cfc4                	sw	s1,28(a5)
     BOARD_DCACHE_CLEAN((void *)a, sizeof(uint32_t));
-    80000aaa:	0010702b          	l1d_clean_all
+    80000c22:	0010702b          	l1d_clean_all
     BOARD_FENCE();
-    80000aae:	0330000f          	fence	rw,rw
+    80000c26:	0330000f          	fence	rw,rw
         for (;;) { }
-    80000ab2:	a001                	j	80000ab2 <qwen3_main+0x7ca>
+    80000c2a:	a001                	j	80000c2a <qwen3_main+0x8a4>
     if (ms) { P("  ("); U(1000 / (ms ? ms : 1)); P(" token/s)"); }
-    80000ab4:	00000517          	auipc	a0,0x0
-    80000ab8:	7a450513          	addi	a0,a0,1956 # 80001258 <msg_hint+0x5f0>
-    80000abc:	e56ff0ef          	jal	80000112 <P>
-    80000ac0:	02995533          	divu	a0,s2,s1
-    80000ac4:	f4aff0ef          	jal	8000020e <U>
-    80000ac8:	00000517          	auipc	a0,0x0
-    80000acc:	79850513          	addi	a0,a0,1944 # 80001260 <msg_hint+0x5f8>
-    80000ad0:	e42ff0ef          	jal	80000112 <P>
-    80000ad4:	bdd5                	j	800009c8 <qwen3_main+0x6e0>
+    80000c2c:	00000517          	auipc	a0,0x0
+    80000c30:	7dc50513          	addi	a0,a0,2012 # 80001408 <msg_hint+0x628>
+    80000c34:	ce6ff0ef          	jal	8000011a <P>
+    80000c38:	02995533          	divu	a0,s2,s1
+    80000c3c:	ddaff0ef          	jal	80000216 <U>
+    80000c40:	00000517          	auipc	a0,0x0
+    80000c44:	7d050513          	addi	a0,a0,2000 # 80001410 <msg_hint+0x630>
+    80000c48:	cd2ff0ef          	jal	8000011a <P>
+    80000c4c:	bd19                	j	80000a62 <qwen3_main+0x6dc>
 
-0000000080000ad6 <memcpy>:
+0000000080000c4e <memcpy>:
 NO_LOOP_IDIOM
 void *memcpy(void *dst, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
     /* 双方同余时按 8 字节走，快一个数量级 */
     if (((uintptr_t)d & 7u) == ((uintptr_t)s & 7u)) {
-    80000ad6:	00b547b3          	xor	a5,a0,a1
-    80000ada:	8b9d                	andi	a5,a5,7
-    80000adc:	e7ad                	bnez	a5,80000b46 <memcpy+0x70>
+    80000c4e:	00b547b3          	xor	a5,a0,a1
+    80000c52:	8b9d                	andi	a5,a5,7
+    80000c54:	e7ad                	bnez	a5,80000cbe <memcpy+0x70>
     uint8_t *d = (uint8_t *)dst;
-    80000ade:	87aa                	mv	a5,a0
+    80000c56:	87aa                	mv	a5,a0
         while (n && ((uintptr_t)d & 7u)) { *d++ = *s++; n--; }
-    80000ae0:	ea11                	bnez	a2,80000af4 <memcpy+0x1e>
-    80000ae2:	8082                	ret
-    80000ae4:	0005c703          	lbu	a4,0(a1)
-    80000ae8:	167d                	addi	a2,a2,-1 # fff <__jvt_base$+0xfff>
-    80000aea:	0585                	addi	a1,a1,1
-    80000aec:	00e78023          	sb	a4,0(a5) # 87f000 <_stack_size+0x83f000>
-    80000af0:	0785                	addi	a5,a5,1
-    80000af2:	ca29                	beqz	a2,80000b44 <memcpy+0x6e>
-    80000af4:	0077f713          	andi	a4,a5,7
-    80000af8:	f775                	bnez	a4,80000ae4 <memcpy+0xe>
+    80000c58:	ea11                	bnez	a2,80000c6c <memcpy+0x1e>
+    80000c5a:	8082                	ret
+    80000c5c:	0005c703          	lbu	a4,0(a1)
+    80000c60:	167d                	addi	a2,a2,-1 # fff <__jvt_base$+0xfff>
+    80000c62:	0585                	addi	a1,a1,1
+    80000c64:	00e78023          	sb	a4,0(a5) # 87f000 <_stack_size+0x83f000>
+    80000c68:	0785                	addi	a5,a5,1
+    80000c6a:	ca29                	beqz	a2,80000cbc <memcpy+0x6e>
+    80000c6c:	0077f713          	andi	a4,a5,7
+    80000c70:	f775                	bnez	a4,80000c5c <memcpy+0xe>
         uint64_t *d8 = (uint64_t *)d;
         const uint64_t *s8 = (const uint64_t *)s;
         while (n >= 8) { *d8++ = *s8++; n -= 8; }
-    80000afa:	471d                	li	a4,7
-    80000afc:	02c77a63          	bgeu	a4,a2,80000b30 <memcpy+0x5a>
-    80000b00:	ff860313          	addi	t1,a2,-8
-    80000b04:	ff837893          	andi	a7,t1,-8
-    80000b08:	08a1                	addi	a7,a7,8
-    80000b0a:	98be                	add	a7,a7,a5
-    80000b0c:	86ae                	mv	a3,a1
-    80000b0e:	873e                	mv	a4,a5
-    80000b10:	0006b803          	ld	a6,0(a3)
-    80000b14:	0721                	addi	a4,a4,8
-    80000b16:	06a1                	addi	a3,a3,8
-    80000b18:	ff073c23          	sd	a6,-8(a4)
-    80000b1c:	ff171ae3          	bne	a4,a7,80000b10 <memcpy+0x3a>
-    80000b20:	ff837713          	andi	a4,t1,-8
-    80000b24:	05a1                	addi	a1,a1,8
-    80000b26:	07a1                	addi	a5,a5,8
-    80000b28:	8a1d                	andi	a2,a2,7
-    80000b2a:	95ba                	add	a1,a1,a4
-    80000b2c:	97ba                	add	a5,a5,a4
+    80000c72:	471d                	li	a4,7
+    80000c74:	02c77a63          	bgeu	a4,a2,80000ca8 <memcpy+0x5a>
+    80000c78:	ff860313          	addi	t1,a2,-8
+    80000c7c:	ff837893          	andi	a7,t1,-8
+    80000c80:	08a1                	addi	a7,a7,8
+    80000c82:	98be                	add	a7,a7,a5
+    80000c84:	86ae                	mv	a3,a1
+    80000c86:	873e                	mv	a4,a5
+    80000c88:	0006b803          	ld	a6,0(a3)
+    80000c8c:	0721                	addi	a4,a4,8 # a000008 <_stack_size+0x9fc0008>
+    80000c8e:	06a1                	addi	a3,a3,8
+    80000c90:	ff073c23          	sd	a6,-8(a4)
+    80000c94:	ff171ae3          	bne	a4,a7,80000c88 <memcpy+0x3a>
+    80000c98:	ff837713          	andi	a4,t1,-8
+    80000c9c:	05a1                	addi	a1,a1,8
+    80000c9e:	07a1                	addi	a5,a5,8
+    80000ca0:	8a1d                	andi	a2,a2,7
+    80000ca2:	95ba                	add	a1,a1,a4
+    80000ca4:	97ba                	add	a5,a5,a4
         d = (uint8_t *)d8; s = (const uint8_t *)s8;
     }
     while (n--) *d++ = *s++;
-    80000b2e:	ce11                	beqz	a2,80000b4a <memcpy+0x74>
-    80000b30:	963e                	add	a2,a2,a5
-    80000b32:	0005c703          	lbu	a4,0(a1)
-    80000b36:	0785                	addi	a5,a5,1
-    80000b38:	0585                	addi	a1,a1,1
-    80000b3a:	fee78fa3          	sb	a4,-1(a5)
-    80000b3e:	fec79ae3          	bne	a5,a2,80000b32 <memcpy+0x5c>
-    80000b42:	8082                	ret
+    80000ca6:	ce11                	beqz	a2,80000cc2 <memcpy+0x74>
+    80000ca8:	963e                	add	a2,a2,a5
+    80000caa:	0005c703          	lbu	a4,0(a1)
+    80000cae:	0785                	addi	a5,a5,1
+    80000cb0:	0585                	addi	a1,a1,1
+    80000cb2:	fee78fa3          	sb	a4,-1(a5)
+    80000cb6:	fec79ae3          	bne	a5,a2,80000caa <memcpy+0x5c>
+    80000cba:	8082                	ret
     return dst;
 }
-    80000b44:	8082                	ret
+    80000cbc:	8082                	ret
     uint8_t *d = (uint8_t *)dst;
-    80000b46:	87aa                	mv	a5,a0
+    80000cbe:	87aa                	mv	a5,a0
     while (n--) *d++ = *s++;
-    80000b48:	f665                	bnez	a2,80000b30 <memcpy+0x5a>
-    80000b4a:	8082                	ret
+    80000cc0:	f665                	bnez	a2,80000ca8 <memcpy+0x5a>
+    80000cc2:	8082                	ret
 
-0000000080000b4c <memset>:
+0000000080000cc4 <memset>:
 
 NO_LOOP_IDIOM
 void *memset(void *dst, int c, size_t n) {
     uint8_t *d = (uint8_t *)dst;
     uint8_t v = (uint8_t)c;
-    80000b4c:	0ff5f593          	zext.b	a1,a1
+    80000cc4:	0ff5f593          	zext.b	a1,a1
     uint8_t *d = (uint8_t *)dst;
-    80000b50:	87aa                	mv	a5,a0
+    80000cc8:	87aa                	mv	a5,a0
     while (n && ((uintptr_t)d & 7u)) { *d++ = v; n--; }
-    80000b52:	e619                	bnez	a2,80000b60 <memset+0x14>
-    80000b54:	8082                	ret
-    80000b56:	167d                	addi	a2,a2,-1
-    80000b58:	00b78023          	sb	a1,0(a5)
-    80000b5c:	0785                	addi	a5,a5,1
-    80000b5e:	ca29                	beqz	a2,80000bb0 <memset+0x64>
-    80000b60:	0077f713          	andi	a4,a5,7
-    80000b64:	fb6d                	bnez	a4,80000b56 <memset+0xa>
+    80000cca:	e619                	bnez	a2,80000cd8 <memset+0x14>
+    80000ccc:	8082                	ret
+    80000cce:	167d                	addi	a2,a2,-1
+    80000cd0:	00b78023          	sb	a1,0(a5)
+    80000cd4:	0785                	addi	a5,a5,1
+    80000cd6:	ca29                	beqz	a2,80000d28 <memset+0x64>
+    80000cd8:	0077f713          	andi	a4,a5,7
+    80000cdc:	fb6d                	bnez	a4,80000cce <memset+0xa>
     uint64_t w = 0x0101010101010101ull * v;
-    80000b66:	01010737          	lui	a4,0x1010
-    80000b6a:	10170713          	addi	a4,a4,257 # 1010101 <_stack_size+0xfd0101>
-    80000b6e:	02071813          	slli	a6,a4,0x20
-    80000b72:	983a                	add	a6,a6,a4
+    80000cde:	01010737          	lui	a4,0x1010
+    80000ce2:	10170713          	addi	a4,a4,257 # 1010101 <_stack_size+0xfd0101>
+    80000ce6:	02071813          	slli	a6,a4,0x20
+    80000cea:	983a                	add	a6,a6,a4
     uint64_t *d8 = (uint64_t *)d;
     while (n >= 8) { *d8++ = w; n -= 8; }
-    80000b74:	471d                	li	a4,7
+    80000cec:	471d                	li	a4,7
     uint64_t w = 0x0101010101010101ull * v;
-    80000b76:	03058833          	mul	a6,a1,a6
+    80000cee:	03058833          	mul	a6,a1,a6
     while (n >= 8) { *d8++ = w; n -= 8; }
-    80000b7a:	02c77463          	bgeu	a4,a2,80000ba2 <memset+0x56>
-    80000b7e:	ff860893          	addi	a7,a2,-8
-    80000b82:	ff88f693          	andi	a3,a7,-8
-    80000b86:	06a1                	addi	a3,a3,8
-    80000b88:	96be                	add	a3,a3,a5
+    80000cf2:	02c77463          	bgeu	a4,a2,80000d1a <memset+0x56>
+    80000cf6:	ff860893          	addi	a7,a2,-8
+    80000cfa:	ff88f693          	andi	a3,a7,-8
+    80000cfe:	06a1                	addi	a3,a3,8
+    80000d00:	96be                	add	a3,a3,a5
     uint64_t *d8 = (uint64_t *)d;
-    80000b8a:	873e                	mv	a4,a5
+    80000d02:	873e                	mv	a4,a5
     while (n >= 8) { *d8++ = w; n -= 8; }
-    80000b8c:	0721                	addi	a4,a4,8
-    80000b8e:	ff073c23          	sd	a6,-8(a4)
-    80000b92:	fed71de3          	bne	a4,a3,80000b8c <memset+0x40>
-    80000b96:	ff88f893          	andi	a7,a7,-8
-    80000b9a:	07a1                	addi	a5,a5,8
-    80000b9c:	8a1d                	andi	a2,a2,7
-    80000b9e:	97c6                	add	a5,a5,a7
+    80000d04:	0721                	addi	a4,a4,8
+    80000d06:	ff073c23          	sd	a6,-8(a4)
+    80000d0a:	fed71de3          	bne	a4,a3,80000d04 <memset+0x40>
+    80000d0e:	ff88f893          	andi	a7,a7,-8
+    80000d12:	07a1                	addi	a5,a5,8
+    80000d14:	8a1d                	andi	a2,a2,7
+    80000d16:	97c6                	add	a5,a5,a7
     d = (uint8_t *)d8;
     while (n--) *d++ = v;
-    80000ba0:	ca01                	beqz	a2,80000bb0 <memset+0x64>
-    80000ba2:	0c067057          	vsetvli	zero,a2,e8,m1,ta,ma
-    80000ba6:	5e05c0d7          	vmv.v.x	v1,a1
-    80000baa:	020780a7          	vse8.v	v1,(a5)
+    80000d18:	ca01                	beqz	a2,80000d28 <memset+0x64>
+    80000d1a:	0c067057          	vsetvli	zero,a2,e8,m1,ta,ma
+    80000d1e:	5e05c0d7          	vmv.v.x	v1,a1
+    80000d22:	020780a7          	vse8.v	v1,(a5)
     return dst;
-    80000bae:	8082                	ret
+    80000d26:	8082                	ret
 }
-    80000bb0:	8082                	ret
+    80000d28:	8082                	ret
 
-0000000080000bb2 <memmove>:
+0000000080000d2a <memmove>:
 
 NO_LOOP_IDIOM
 void *memmove(void *dst, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
     if (d == s || n == 0) return dst;
-    80000bb2:	02b50a63          	beq	a0,a1,80000be6 <memmove+0x34>
-    80000bb6:	ca05                	beqz	a2,80000be6 <memmove+0x34>
+    80000d2a:	02b50a63          	beq	a0,a1,80000d5e <memmove+0x34>
+    80000d2e:	ca05                	beqz	a2,80000d5e <memmove+0x34>
     if (d < s) { while (n--) *d++ = *s++; }
-    80000bb8:	00b57d63          	bgeu	a0,a1,80000bd2 <memmove+0x20>
-    80000bbc:	962a                	add	a2,a2,a0
+    80000d30:	00b57d63          	bgeu	a0,a1,80000d4a <memmove+0x20>
+    80000d34:	962a                	add	a2,a2,a0
     uint8_t *d = (uint8_t *)dst;
-    80000bbe:	87aa                	mv	a5,a0
+    80000d36:	87aa                	mv	a5,a0
     if (d < s) { while (n--) *d++ = *s++; }
-    80000bc0:	0005c703          	lbu	a4,0(a1)
-    80000bc4:	0785                	addi	a5,a5,1
-    80000bc6:	0585                	addi	a1,a1,1
-    80000bc8:	fee78fa3          	sb	a4,-1(a5)
-    80000bcc:	fec79ae3          	bne	a5,a2,80000bc0 <memmove+0xe>
-    80000bd0:	8082                	ret
+    80000d38:	0005c703          	lbu	a4,0(a1)
+    80000d3c:	0785                	addi	a5,a5,1
+    80000d3e:	0585                	addi	a1,a1,1
+    80000d40:	fee78fa3          	sb	a4,-1(a5)
+    80000d44:	fec79ae3          	bne	a5,a2,80000d38 <memmove+0xe>
+    80000d48:	8082                	ret
     else       { d += n; s += n; while (n--) *--d = *--s; }
-    80000bd2:	95b2                	add	a1,a1,a2
-    80000bd4:	962a                	add	a2,a2,a0
-    80000bd6:	fff5c783          	lbu	a5,-1(a1)
-    80000bda:	167d                	addi	a2,a2,-1
-    80000bdc:	15fd                	addi	a1,a1,-1
-    80000bde:	00f60023          	sb	a5,0(a2)
-    80000be2:	fec51ae3          	bne	a0,a2,80000bd6 <memmove+0x24>
+    80000d4a:	95b2                	add	a1,a1,a2
+    80000d4c:	962a                	add	a2,a2,a0
+    80000d4e:	fff5c783          	lbu	a5,-1(a1)
+    80000d52:	167d                	addi	a2,a2,-1
+    80000d54:	15fd                	addi	a1,a1,-1
+    80000d56:	00f60023          	sb	a5,0(a2)
+    80000d5a:	fec51ae3          	bne	a0,a2,80000d4e <memmove+0x24>
     return dst;
 }
-    80000be6:	8082                	ret
+    80000d5e:	8082                	ret
 
-0000000080000be8 <memcmp>:
+0000000080000d60 <memcmp>:
 
 NO_LOOP_IDIOM
 int memcmp(const void *a, const void *b, size_t n) {
     const uint8_t *p = (const uint8_t *)a, *q = (const uint8_t *)b;
     while (n--) { if (*p != *q) return (int)*p - (int)*q; p++; q++; }
-    80000be8:	c205                	beqz	a2,80000c08 <memcmp+0x20>
-    80000bea:	962a                	add	a2,a2,a0
-    80000bec:	a019                	j	80000bf2 <memcmp+0xa>
-    80000bee:	00c50d63          	beq	a0,a2,80000c08 <memcmp+0x20>
-    80000bf2:	00054783          	lbu	a5,0(a0)
-    80000bf6:	0005c703          	lbu	a4,0(a1)
-    80000bfa:	0505                	addi	a0,a0,1
-    80000bfc:	0585                	addi	a1,a1,1
-    80000bfe:	fee788e3          	beq	a5,a4,80000bee <memcmp+0x6>
-    80000c02:	40e7853b          	subw	a0,a5,a4
-    80000c06:	8082                	ret
+    80000d60:	c205                	beqz	a2,80000d80 <memcmp+0x20>
+    80000d62:	962a                	add	a2,a2,a0
+    80000d64:	a019                	j	80000d6a <memcmp+0xa>
+    80000d66:	00c50d63          	beq	a0,a2,80000d80 <memcmp+0x20>
+    80000d6a:	00054783          	lbu	a5,0(a0)
+    80000d6e:	0005c703          	lbu	a4,0(a1)
+    80000d72:	0505                	addi	a0,a0,1
+    80000d74:	0585                	addi	a1,a1,1
+    80000d76:	fee788e3          	beq	a5,a4,80000d66 <memcmp+0x6>
+    80000d7a:	40e7853b          	subw	a0,a5,a4
+    80000d7e:	8082                	ret
     return 0;
-    80000c08:	4501                	li	a0,0
+    80000d80:	4501                	li	a0,0
 }
-    80000c0a:	8082                	ret
+    80000d82:	8082                	ret
 
-0000000080000c0c <strlen>:
+0000000080000d84 <strlen>:
 
 NO_LOOP_IDIOM
 size_t strlen(const char *s) {
     const char *p = s;
     while (*p) p++;
-    80000c0c:	00054783          	lbu	a5,0(a0)
-    80000c10:	cb89                	beqz	a5,80000c22 <strlen+0x16>
+    80000d84:	00054783          	lbu	a5,0(a0)
+    80000d88:	cb89                	beqz	a5,80000d9a <strlen+0x16>
     const char *p = s;
-    80000c12:	87aa                	mv	a5,a0
+    80000d8a:	87aa                	mv	a5,a0
     while (*p) p++;
-    80000c14:	0017c703          	lbu	a4,1(a5)
-    80000c18:	0785                	addi	a5,a5,1
-    80000c1a:	ff6d                	bnez	a4,80000c14 <strlen+0x8>
+    80000d8c:	0017c703          	lbu	a4,1(a5)
+    80000d90:	0785                	addi	a5,a5,1
+    80000d92:	ff6d                	bnez	a4,80000d8c <strlen+0x8>
     return (size_t)(p - s);
-    80000c1c:	40a78533          	sub	a0,a5,a0
-    80000c20:	8082                	ret
+    80000d94:	40a78533          	sub	a0,a5,a0
+    80000d98:	8082                	ret
     while (*p) p++;
-    80000c22:	4501                	li	a0,0
+    80000d9a:	4501                	li	a0,0
 }
-    80000c24:	8082                	ret
+    80000d9c:	8082                	ret

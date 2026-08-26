@@ -95,18 +95,17 @@
 #define BOARD_UART_REG_SHIFT  2
 #endif
 
-/* UART 的输入时钟。本版板子上与 CPU 主频同为 40 MHz，但仍单独定义：
+/* UART 的输入时钟。**与 CPU 主频是两个不同的值**：CPU 40 MHz、UART 10 MHz。
  *     BOARD_CPU_HZ        -> 把 mcycle 换算成秒
  *     BOARD_UART_CLK_HZ   -> 只用来算波特率分频
- *   两者是各自独立的配置项，只是这一版取值恰好相同。分开写是为了将来动
- *   CPU 主频时不会连带把波特率改错 —— 那种错误的现象是串口满屏乱码，
- *   而不是没有输出，很容易往别的方向查。
+ *   两者是各自独立的配置项，取值也确实不同。拿 CPU 主频去算分频会偏 4 倍，
+ *   现象是串口满屏乱码而不是没有输出，很容易往别的方向查。
  *
  * 分频因子 = UART_CLK / (16 x 波特率)，见下面的 BOARD_UART_DIVISOR。
- * 40 MHz / (16 x 115200) = 21.70，除不尽，小数部分靠 DLF 补，
+ * 10 MHz / (16 x 115200) = 5.43，除不尽，小数部分靠 DLF 补，
  * 详见下面 BOARD_UART_HAS_DLF 处的说明。 */
 #ifndef BOARD_UART_CLK_HZ
-#define BOARD_UART_CLK_HZ     40000000
+#define BOARD_UART_CLK_HZ     10000000
 #endif
 #ifndef BOARD_UART_BAUD
 #define BOARD_UART_BAUD       115200
@@ -116,11 +115,14 @@
 
 /* DLF（Divisor Latch Fraction）—— 小数分频寄存器。
  * 本板 UART 用的是 **Synopsys DW_apb_uart**（已确认），所以这个寄存器存在；
- * 标准 16550 是没有它的。有了它才能在 40 MHz 这种除不尽的时钟下配准波特率。
+ * 标准 16550 是没有它的。有了它才能在 10 MHz 这种除不尽的时钟下配准波特率。
  *
- * 在本板上它不是锦上添花而是必需：40 MHz 下理想分频 21.70，
- * 只用整数分频取 21 偏 +3.34%，**已超出 16550 常见的 ±2~3% 容限**；
- * 补上 DLF 后偏差降到 +0.06%。
+ * ★ 在 10 MHz 下 DLF 不是锦上添花，而是**唯一可行的办法**：
+ *   理想分频 5.43，整数只能取 5 -> 125000 baud，偏 +8.5%，
+ *   远超 16550 常见的 ±2~3% 容限，串口根本收不对。
+ *   补上 DLF = 7/16 后实际 114943 baud，偏 -0.22%。
+ *   注意此时**没有降级路径**：四舍五入同样得 5，偏差不变。
+ *   （40 MHz 时尚可退到 22 勉强用，10 MHz 时这条路走不通。）
  *
  *   位置：寄存器索引 48，字节偏移 0xC0 = 48 << REG_SHIFT(2)，
  *         即 DW_apb_uart 手册里 DLF 的标准偏移。
@@ -165,7 +167,8 @@
 /* 真机没有 sifive_test，跑完停在死循环里等 host 读结果。 */
 #define BOARD_HAS_POWEROFF    0
 
-/* CPU 与 AME 同为 40 MHz。用来把 mcycle 换算成真实秒数 ——
+/* CPU 与 AME 同为 40 MHz（注意 UART 是另一个时钟，10 MHz）。
+ * 用来把 mcycle 换算成真实秒数 ——
  * demo 里报"生成 N 个 token 用时 X 秒"就靠它。 */
 #define BOARD_CPU_HZ          40000000
 
@@ -174,9 +177,9 @@
 /* 波特率分频。BOARD_UART_CLK_HZ 为 0 表示该平台无需配置。
  *
  * DLL/DLM 存**整数**部分，小数部分交给 DLF（见下）：
- *   40 MHz / (16 x 115200) = 21.7014
- *   整数 21 单独使用时实际波特率 119048，误差 +3.34%，已超出容限；
- *   补上 DLF = 11/16 之后实际 115274，误差 +0.06%。 */
+ *   10 MHz / (16 x 115200) = 5.4253
+ *   整数 5 单独使用时实际波特率 125000，误差 +8.51%，远超容限；
+ *   补上 DLF = 7/16 之后实际 114943，误差 -0.22%。 */
 #if BOARD_UART_CLK_HZ
 /* 16 x 波特率：整数分频与小数分频共用的步长 */
 #define BOARD_UART_STEP      (16 * BOARD_UART_BAUD)
@@ -185,8 +188,8 @@
 #define BOARD_UART_DIVISOR   (BOARD_UART_CLK_HZ / BOARD_UART_STEP)
 #else
 /* 没有 DLF（标准 16550 就没有）：只剩整数分频，此时**四舍五入**才是最优解。
- * 40 MHz 的例子：截断得 21 -> 误差 +3.34%（**超容限，会错帧**）；
- *                四舍五入得 22 -> 误差 -1.36%（回到容限内）。
+ * 注意：10 MHz 下这条降级路径救不了 —— 截断与四舍五入同样得 5，
+ * 都偏 +8.51%。该分支只在时钟较高（如 40 MHz 得 21/22）时才有意义。
  * 所以这里不能沿用上面那条截断式 —— 把 BOARD_UART_HAS_DLF 关掉时，
  * 分频值会自动跟着切换，不需要再手工算一遍。 */
 #define BOARD_UART_DIVISOR       ((BOARD_UART_CLK_HZ + BOARD_UART_STEP / 2) / BOARD_UART_STEP)
@@ -220,6 +223,11 @@
 #define BOARD_MBOX_CYCLES_HI  (BOARD_MBOX_ADDR + 0x10)
 #define BOARD_MBOX_TOKENS     (BOARD_MBOX_ADDR + 0x20)  /* 生成的 token id 数组 */
 #define BOARD_MBOX_TEXT       (BOARD_MBOX_ADDR + 0x400) /* 解码后的 UTF-8 文本 */
+/* 两个区的容量。程序按这两个数截断，绝不越界往后写 ——
+ * mailbox 之后就是权重区，写过界会把权重悄悄改掉，
+ * 而那种错误只会表现为"模型胡言乱语"，几乎无从查起。 */
+#define BOARD_MBOX_TOKENS_MAX 240                       /* (0x400-0x20)/4 = 248，留些余量 */
+#define BOARD_MBOX_TEXT_BYTES 4096                      /* UTF-8 中文约 1300 字 */
 
 /* STATUS 取值。用有辨识度的魔数，避免与未初始化内存混淆。 */
 #define BOARD_ST_BOOT         0xB0000001      /* 启动，尚未初始化 */

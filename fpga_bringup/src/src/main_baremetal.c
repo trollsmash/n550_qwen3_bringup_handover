@@ -67,8 +67,8 @@ static inline void uart_wr(int idx, uint32_t v) {
 
 /* 配波特率。本板不能指望 bootrom 已配好，程序必须自己来。
  *
- * 分频参数全部来自 board.h，由 BOARD_UART_CLK_HZ（UART 输入时钟，40 MHz）
- * 算出。它与 BOARD_CPU_HZ 是两个独立配置项，本版板子上取值恰好相同。
+ * 分频参数全部来自 board.h，由 BOARD_UART_CLK_HZ（UART 输入时钟，10 MHz）
+ * 算出 —— 它与 BOARD_CPU_HZ（40 MHz）是两个不同的值，别拿错。
  * 拿错时钟的现象是满屏乱码，而不是没有输出。 */
 static void uart_init(void) {
 #if BOARD_UART_NEEDS_INIT
@@ -236,6 +236,30 @@ static void mbox_set(unsigned long addr, uint32_t v) {
     BOARD_FENCE();
 }
 
+/* mailbox 写文本：host 经 PCIe 后门读 DDR 就能拿到中文答案，
+ * 完全不依赖串口。L0 的教训就是别把观测全压在串口上 ——
+ * 波特率、线序、终端编码任何一环出问题，串口就是一片死寂，
+ * 而 mailbox 走的是 host 本来就在用的后门通路。 */
+static unsigned long g_text_used;
+
+static void mbox_text_reset(void) {
+    g_text_used = 0;
+    *BOARD_PTR(uint8_t, BOARD_MBOX_TEXT) = 0;
+    BOARD_DCACHE_CLEAN((void *)(uintptr_t)BOARD_MBOX_TEXT, 1);
+    BOARD_FENCE();
+}
+
+/* 追加一段 UTF-8 并保持 NUL 结尾。留 1 字节给结束符，超长就丢弃后续 —— 
+ * 宁可截断也不能越界写进权重区。 */
+static void mbox_text_append(const uint8_t *p, size_t n) {
+    unsigned long cap = BOARD_MBOX_TEXT_BYTES - 1;
+    for (size_t i = 0; i < n && g_text_used < cap; i++)
+        *BOARD_PTR(uint8_t, BOARD_MBOX_TEXT + g_text_used++) = p[i];
+    *BOARD_PTR(uint8_t, BOARD_MBOX_TEXT + g_text_used) = 0;
+    BOARD_DCACHE_CLEAN((void *)(uintptr_t)BOARD_MBOX_TEXT, g_text_used + 1);
+    BOARD_FENCE();
+}
+
 void qwen3_on_layer(int layer, int n_layers) {
     if (layer == 0) putc_('[');
     putc_('.');
@@ -308,6 +332,10 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
         return;
     }
 
+    mbox_set(BOARD_MBOX_STATUS, BOARD_ST_RUNNING);
+    mbox_set(BOARD_MBOX_NTOKEN, 0);
+    mbox_text_reset();
+
     uint64_t c0 = rd_mcycle();
     qwen3_forward_batch(m, g_chat_ids, n_in, 0);
     int next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
@@ -317,7 +345,13 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
         size_t plen;
         const uint8_t *piece = qwen3_tok_piece(tk, next, &plen);
         for (size_t q = 0; q < plen; q++) putc_((char)piece[q]);   /* 流式 */
+        /* 同一份结果也写进 mailbox：串口若不通，host 后门照样读得到 */
+        if (got < BOARD_MBOX_TOKENS_MAX)
+            *BOARD_PTR(uint32_t, BOARD_MBOX_TOKENS + 4u * (unsigned)got) =
+                (uint32_t)next;
+        mbox_text_append(piece, plen);
         got++;
+        mbox_set(BOARD_MBOX_NTOKEN, (uint32_t)got);
         /* 最后一个 token 不必再前向：那一整遍 1.1 GB 权重算出的 logits
          * 没有任何人会用到。 */
         if (i + 1 >= CHAT_MAX_GEN) break;
@@ -325,6 +359,9 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
         next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
     }
     uint64_t c1 = rd_mcycle();
+    mbox_set(BOARD_MBOX_CYCLES_LO, (uint32_t)(c1 - c0));
+    mbox_set(BOARD_MBOX_CYCLES_HI, (uint32_t)((c1 - c0) >> 32));
+    mbox_set(BOARD_MBOX_STATUS, BOARD_ST_DONE);
 
     /* 现场把速度算出来。这个数比幻灯片上任何数字都有说服力，
      * 因为它是当场跑出来的。 */
@@ -342,7 +379,31 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
     P("]\n");
 }
 
+/* 把 mailbox 的关键字段读回来打一遍。
+ *
+ * 这不是调试残留：上板时它能立刻回答一个关键问题 ——
+ * "host 后门读到的，和串口上看到的，是同一份东西吗？"
+ * 两者不一致就说明写侧的 cache 同步没生效，而那正是 L0 上踩过的坑。
+ * 读之前先 FLUSH，确保拿到的是 DDR 里的值而非本地拷贝。 */
+static void mbox_selfread(void) {
+    BOARD_DCACHE_FLUSH((void *)(uintptr_t)BOARD_MBOX_ADDR,
+                       0x400 + BOARD_MBOX_TEXT_BYTES);
+    BOARD_FENCE();
+    P("\nmailbox 回读（host 后门应看到同样内容）：\n");
+    P("  STATUS  "); X(*BOARD_PTR(uint32_t, BOARD_MBOX_STATUS)); P("\n");
+    P("  NTOKEN  "); U(*BOARD_PTR(uint32_t, BOARD_MBOX_NTOKEN)); P("\n");
+    P("  TEXT    ");
+    {
+        const volatile uint8_t *t = BOARD_PTR(uint8_t, BOARD_MBOX_TEXT);
+        for (unsigned i = 0; i < 256 && t[i]; i++) putc_((char)t[i]);
+    }
+    P("\n");
+}
+
 static void chat_repl(qwen3_t *m, qwen3_tok_t *tk) {
+    /* 权重与分词器都就位了。host 轮到这个状态就知道可以开始交互 —— 
+     * 1.11 GB 权重的加载与校验要花不少时间，没有这个标志只能靠猜。 */
+    mbox_set(BOARD_MBOX_STATUS, BOARD_ST_READY);
     P("\n============ 交互模式 ============\n");
     P("直接输入中文问题后回车；输入数字选预置问题；q 退出\n");
     for (int i = 0; i < N_PRESET; i++) {
@@ -362,6 +423,7 @@ static void chat_repl(qwen3_t *m, qwen3_tok_t *tk) {
         P("\n");
         chat_once(m, tk, prompt);
     }
+    mbox_selfread();
     P("\n再见。\n");
 }
 
