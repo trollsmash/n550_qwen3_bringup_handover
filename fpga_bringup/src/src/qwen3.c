@@ -37,11 +37,12 @@ static int32_t rd_i32(const uint8_t *p) {
 }
 
 static float rd_f32(const uint8_t *p) {
-    uint32_t u = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-                 ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-    float f;
-    memcpy(&f, &u, sizeof f);
-    return f;
+    /* union 而非 memcpy：少一次函数调用，也少一个嫌疑对象。
+     * C99 起通过 union 做位模式重解释是明确允许的，不涉及严格别名问题。 */
+    union { uint32_t u; float f; } v;
+    v.u = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+          ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    return v.f;
 }
 
 /* 顺序游标：按导出顺序依次切出每个张量的指针。 */

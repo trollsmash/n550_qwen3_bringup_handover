@@ -16,18 +16,22 @@
 
 #define NO_LOOP_IDIOM __attribute__((optimize("no-tree-loop-distribute-patterns")))
 
+/* ★ 诊断期版本：退回最朴素的逐字节复制。
+ *
+ * 原本有一条「双方同余就按 8 字节走」的快路径，逻辑本身没有问题
+ * （同余 + 先补齐，保证 d 与 s 都落在 8 字节边界上）。改成这样是为了
+ * 排除嫌疑：真机上两次故障都落在 memcpy 前 32 字节内，而这个函数
+ * 每 token 只调用约 57 次，远少于 GEMM 的指令数 —— 指令占比与故障
+ * 分布不成比例。把实现换掉会改变函数大小与后续代码的布局，
+ * 若故障随之转移或消失，就说明问题跟地址相关而非跟逻辑相关。
+ *
+ * 代价：KV cache 每 token 约 229 KB 的搬运慢 8 倍，等效多花约 1.8 MB
+ * 的访存 —— 相对每 token 必读的 1.11 GB 权重可以忽略。
+ * 结论明确之后可以改回快路径版本。 */
 NO_LOOP_IDIOM
 void *memcpy(void *dst, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
-    /* 双方同余时按 8 字节走，快一个数量级 */
-    if (((uintptr_t)d & 7u) == ((uintptr_t)s & 7u)) {
-        while (n && ((uintptr_t)d & 7u)) { *d++ = *s++; n--; }
-        uint64_t *d8 = (uint64_t *)d;
-        const uint64_t *s8 = (const uint64_t *)s;
-        while (n >= 8) { *d8++ = *s8++; n -= 8; }
-        d = (uint8_t *)d8; s = (const uint8_t *)s8;
-    }
     while (n--) *d++ = *s++;
     return dst;
 }

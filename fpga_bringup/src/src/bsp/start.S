@@ -103,6 +103,10 @@ park:
  * 那时再往栈上写只会把现场彻底毁掉。 */
 trap_save:
     .space 8 * 10
+/* handler 自己出错时的护栏。没有它，第二次 trap 会覆盖 trap_save，
+ * 第一现场就永远拿不回来了 —— 而第一现场才是真正要看的那个。 */
+trap_busy:
+    .space 8
 /* fence.i 重试次数。不设上限的话，真正的非法指令会让它无限重试。 */
 trap_retry:
     .space 8
@@ -113,6 +117,15 @@ trap_retry:
 trap_entry:
     /* 先把要用到的寄存器全存下来，之后才有资格谈"返回现场"。
      * mscratch 解开鸡生蛋：保存基址本身也要占一个寄存器。 */
+    csrw    mscratch, t6
+    /* 已经在处理 trap 了？那说明 handler 自己出了错。立刻打一行短消息停机，
+     * **绝不覆盖 trap_save** —— 保住第一现场比报告第二次错误重要得多。
+     * 这一步只许用 t6（唯一已存进 mscratch 的），别的寄存器还没保存。 */
+    la      t6, trap_busy
+    ld      t6, 0(t6)
+    bnez    t6, trap_nested
+    csrr    t6, mscratch          /* 取回原 t6，下面按常规流程保存 */
+
     csrw    mscratch, t6
     la      t6, trap_save
     sd      t0, 0(t6)
@@ -125,6 +138,10 @@ trap_entry:
     sd      a2, 56(t6)
     csrr    t0, mscratch
     sd      t0, 64(t6)            /* 原 t6 */
+    /* 寄存器都存好了，现在才置忙标志 —— 早置会破坏尚未保存的 t5。 */
+    la      t0, trap_busy
+    li      t1, 1
+    sd      t1, 0(t0)
 
     li      t6, BOARD_UART_BASE   /* 来自 board.h，勿在此硬编码 */
 
@@ -189,8 +206,14 @@ trap_entry:
      * 问题在 I-cache 而不在代码本身。 */
     la      t4, msg_mem
     jal     t3, put_str
+    /* ★ mepc 只保证 **2 字节**对齐：压缩指令让它可以停在 4 的非整数倍上。
+     * 用 lwu 直接读会触发 misaligned load，handler 自己再 trap 一次，
+     * 把第一现场彻底冲掉 —— 拿两个 lhu 拼，2 字节对齐总是满足的。 */
     csrr    t0, mepc
-    lwu     t0, 0(t0)             /* 零扩展：符号扩展会把 0xffffffff 显示成 64 位 */
+    lhu     t1, 0(t0)
+    lhu     t2, 2(t0)
+    slli    t2, t2, 16
+    or      t0, t1, t2
     jal     t3, put_hex
 
     la      t4, msg_retry
@@ -217,6 +240,11 @@ trap_entry:
     la      t4, msg_try
     jal     t3, put_str
 
+    /* 清忙标志。不清的话，返回后再次 trap 会被当成"handler 内部出错"，
+     * 于是只打一行就停机 —— 而那本该是一次完整的新现场。 */
+    la      t6, trap_busy
+    sd      zero, 0(t6)
+
     la      t6, trap_save         /* 恢复现场 */
     ld      t0, 0(t6)
     ld      t1, 8(t6)
@@ -234,6 +262,15 @@ trap_entry:
     jal     t3, put_str
 1:  wfi
     j       1b
+
+/* handler 内部再次出错时走这里。只用 t4/t6 与 put_str，
+ * 不动 trap_save，好让上面已经打出的第一现场保持可信。 */
+trap_nested:
+    li      t6, BOARD_UART_BASE
+    la      t4, msg_nested
+    jal     t3, put_str
+2:  wfi
+    j       2b
 
 /* LSR 的寄存器索引是 5；字节偏移随 REG_SHIFT 变（本核 32 位寄存器 -> 0x14）。 */
 #define UART_LSR_OFF  (5 << BOARD_UART_REG_SHIFT)
@@ -324,5 +361,7 @@ msg_try:
     .asciz "\r\n\r\n  >> fence.i 后返回原处重试 <<\r\n"
 msg_give:
     .asciz "\r\n\r\n  >> 已达重试上限，停机 <<\r\n"
+msg_nested:
+    .asciz "\r\n\r\n  >> handler 内部再次 trap，以上为第一现场，停机 <<\r\n"
 msg_hint:
     .asciz "\r\n\r\n  mcause 最高位为 1 表示中断，否则是异常。常见异常码：\r\n    1=取指访问错  2=非法指令  5=load访问错  7=store访问错\r\n    4/6=地址未对齐  12/13/15=取指/load/store页错\r\n  mtval 通常是出错的地址或指令编码。\r\n  用 riscv-unknown-elf-addr2line -e qwen3_bm.elf <mepc> 定位到源码行。\r\n\r\n"

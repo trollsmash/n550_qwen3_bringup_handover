@@ -1,5 +1,5 @@
 # 文件清单（给人看的；机器校验用 checksums.md5）
-# 生成时间 2026-08-26 17:17
+# 生成时间 2026-08-26 17:51
 #
 # 注意：w.bin (1.11 GB) 不在本仓库，也不在下面的清单里。
 #       它的大小与 md5 见 L2_L3_fullmodel/GET_WEIGHTS.md，请单独核对。
@@ -7,10 +7,10 @@
 # 校验：md5sum -c checksums.md5
 
         字节  文件
-          5944  L0_bringup/bringup_s2c.bin
-         87423  L0_bringup/bringup_s2c.diss
-         66200  L0_bringup/bringup_s2c.elf
-          1281  L0_bringup/bringup_s2c.sym
+          6000  L0_bringup/bringup_s2c.bin
+         87733  L0_bringup/bringup_s2c.diss
+         65704  L0_bringup/bringup_s2c.elf
+          1371  L0_bringup/bringup_s2c.sym
          11653  L0_bringup/checklist.html
           6236  L0_bringup/checklist.md
            820  L1_ame_vectors/BUILD_INFO.txt
@@ -211,10 +211,10 @@
           3549  L1_ame_vectors/golden_src/41_build_vectors.sh
          32090  L1_ame_vectors/index.json
            570  L2_L3_fullmodel/addresses.txt
-         19192  L2_L3_fullmodel/qwen3_s2c.bin
-        356309  L2_L3_fullmodel/qwen3_s2c.diss
-        204952  L2_L3_fullmodel/qwen3_s2c.elf
-          3216  L2_L3_fullmodel/qwen3_s2c.sym
+         19256  L2_L3_fullmodel/qwen3_s2c.bin
+        356632  L2_L3_fullmodel/qwen3_s2c.diss
+        204880  L2_L3_fullmodel/qwen3_s2c.elf
+          3306  L2_L3_fullmodel/qwen3_s2c.sym
        3409013  L2_L3_fullmodel/tok.bin
          12644  README.html
           7526  README.md
@@ -224,8 +224,8 @@
          20186  src/src/bsp/board.h
            599  src/src/bsp/libm_stub.c
           1337  src/src/bsp/qemu_virt.ld
-         11735  src/src/bsp/start.S
-          2444  src/src/bsp/string_min.c
+         13483  src/src/bsp/start.S
+          2907  src/src/bsp/string_min.c
           4940  src/src/kernels.h
          11648  src/src/kernels_ame.c
           2904  src/src/kernels_hwsim.c
@@ -238,7 +238,7 @@
           2072  src/src/ops.h
           8451  src/src/ops_rvv.c
           2776  src/src/ops_scalar.c
-         19477  src/src/qwen3.c
+         19644  src/src/qwen3.c
           8967  src/src/qwen3.h
           3620  src/src/qwen3_config.h
           3901  src/src/test_kernels.c
