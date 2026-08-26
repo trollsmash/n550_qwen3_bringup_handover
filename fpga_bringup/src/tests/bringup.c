@@ -416,6 +416,14 @@ void qwen3_main(void) {
     P("step2 uart        OK   (base "); X(BOARD_UART_BASE); P(")\n");
     mb_set(MB_STATUS, ST_UART);
 
+#ifdef TRAP_TEST
+    /* 故意触发一次非法指令，验证 trap handler 本身可用。
+     * 默认不编入；上板前想确认"真出事时能看到现场"，加 -DTRAP_TEST 编一版即可。
+     * 0xFFFFFFFF 不是任何合法编码，低两位为 11 会被当作 32 位指令去译码。 */
+    P("[TRAP_TEST] 下面故意执行非法指令，应打印完整 trap 现场\n");
+    __asm__ volatile(".word 0xffffffff");
+#endif
+
     /* ---- 步骤 3：回读 host 预置的 magic，反证 PCIe 写 DDR 生效 ---- */
     uint32_t got = mb_get(MB_HOST_MAGIC);
     mb_set(MB_HOST_ECHO, got);

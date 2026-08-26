@@ -7,6 +7,10 @@
  * 所以能直接 include —— UART 基址不要在这里再写一份。
  */
 #include "board.h"
+
+/* fence.i 重试上限。取 3：够区分"刷一次就好"与"怎么刷都不行"，
+ * 又不至于在真正的非法指令上原地打转刷屏。 */
+#define TRAP_MAX_RETRY 3
     .section .text.init, "ax"
     .global _start
 _start:
@@ -93,16 +97,61 @@ park:
  *
  * FPGA 上换板子只需改下面的 UART 基址。
  */
+    .section .bss
+    .align 3
+/* trap 时被破坏的寄存器存这里，**不用栈** —— trap 的起因可能正是栈跑飞了，
+ * 那时再往栈上写只会把现场彻底毁掉。 */
+trap_save:
+    .space 8 * 10
+/* fence.i 重试次数。不设上限的话，真正的非法指令会让它无限重试。 */
+trap_retry:
+    .space 8
+
+    .section .text.init, "ax"
     .align 4
     .global trap_entry
 trap_entry:
+    /* 先把要用到的寄存器全存下来，之后才有资格谈"返回现场"。
+     * mscratch 解开鸡生蛋：保存基址本身也要占一个寄存器。 */
+    csrw    mscratch, t6
+    la      t6, trap_save
+    sd      t0, 0(t6)
+    sd      t1, 8(t6)
+    sd      t2, 16(t6)
+    sd      t3, 24(t6)
+    sd      t4, 32(t6)
+    sd      t5, 40(t6)
+    sd      a1, 48(t6)
+    sd      a2, 56(t6)
+    csrr    t0, mscratch
+    sd      t0, 64(t6)            /* 原 t6 */
+
     li      t6, BOARD_UART_BASE   /* 来自 board.h，勿在此硬编码 */
 
-    /* 先给 host 留个记号：PCIe 能回读 DDR，即使串口没接好也能看出是 trap。
-     * 用 t5 而不是 t0，t0 后面要装 mcause。 */
+    /* ── 先把完整现场写进 mailbox，再去打串口 ──
+     * 顺序是有意的：串口是最不可靠的一环（波特率、线序、终端编码），
+     * 若打印中途挂掉，至少 host 用 PCIe 后门还能把现场完整取走。
+     * 反过来先打串口的话，串口一挂就什么都不剩了。 */
+    li      t5, BOARD_MBOX_TRAP
+    csrr    t0, mcause
+    sw      t0, 0(t5)
+    csrr    t0, mepc
+    sw      t0, 4(t5)
+    csrr    t0, mtval
+    sw      t0, 8(t5)
+    csrr    t0, mstatus
+    sw      t0, 12(t5)
+    sw      ra, 16(t5)          /* 谁调过来的 */
+    sw      sp, 20(t5)          /* 栈指针，看是否跑飞 */
     li      t5, BOARD_MBOX_STATUS
     li      t0, BOARD_ST_TRAP
     sw      t0, 0(t5)
+    /* CPU 的写会停在 L1D，而 host 后门读 DDR 绕过 cache —— 不写回就白记了。
+     * trap 时写回脏行有可能带出半完成的数据，但相比丢掉整个现场，值得。 */
+#ifdef BOARD_USE_L1D_ALL
+    l1d_clean_all
+#endif
+    fence   rw, rw
 
     la      t4, msg_trap
     jal     t3, put_str
@@ -119,18 +168,100 @@ trap_entry:
     csrr    t0, mtval
     jal     t3, put_hex
 
+    la      t4, msg_mstatus
+    jal     t3, put_str
+    csrr    t0, mstatus
+    jal     t3, put_hex
+
+    la      t4, msg_ra
+    jal     t3, put_str
+    mv      t0, ra
+    jal     t3, put_hex
+
+    la      t4, msg_sp
+    jal     t3, put_str
+    mv      t0, sp
+    jal     t3, put_hex
+
+    /* ★ 关键一项：用 load 把 mepc 处的四字节读回来。
+     * 它走 D-cache / DDR 通路，而 mtval 是**取指**通路拿到的编码。
+     * 两者不同就当场证明：取指与数据读看到的不是同一份内容，
+     * 问题在 I-cache 而不在代码本身。 */
+    la      t4, msg_mem
+    jal     t3, put_str
+    csrr    t0, mepc
+    lwu     t0, 0(t0)             /* 零扩展：符号扩展会把 0xffffffff 显示成 64 位 */
+    jal     t3, put_hex
+
+    la      t4, msg_retry
+    jal     t3, put_str
+    la      t0, trap_retry
+    ld      t0, 0(t0)
+    jal     t3, put_hex
+
     la      t4, msg_hint
     jal     t3, put_str
 
+    /* ── 尝试恢复：fence.i 之后重跑同一条指令 ──
+     * 若确是 I-cache 与 DDR 不一致，刷新后重取就拿到正确编码，程序继续往下跑，
+     * 串口会看到 decode 正常推进 —— 那就坐实了 I-cache。
+     * 仍然 trap 则说明不在 I-cache，重试到上限后按原样停机。
+     * mret 回到 mepc 那条指令**重新执行**（而非下一条），正是这里要的语义。 */
+    la      t5, trap_retry
+    ld      t1, 0(t5)
+    li      t2, TRAP_MAX_RETRY
+    bge     t1, t2, 3f
+    addi    t1, t1, 1
+    sd      t1, 0(t5)
+
+    la      t4, msg_try
+    jal     t3, put_str
+
+    la      t6, trap_save         /* 恢复现场 */
+    ld      t0, 0(t6)
+    ld      t1, 8(t6)
+    ld      t2, 16(t6)
+    ld      t3, 24(t6)
+    ld      t4, 32(t6)
+    ld      t5, 40(t6)
+    ld      a1, 48(t6)
+    ld      a2, 56(t6)
+    ld      t6, 64(t6)            /* 最后恢复 t6，此后基址失效 */
+    fence.i
+    mret
+
+3:  la      t4, msg_give
+    jal     t3, put_str
 1:  wfi
     j       1b
 
-/* 打印以 NUL 结尾的字符串，地址在 t4，返回地址在 t3 */
+/* LSR 的寄存器索引是 5；字节偏移随 REG_SHIFT 变（本核 32 位寄存器 -> 0x14）。 */
+#define UART_LSR_OFF  (5 << BOARD_UART_REG_SHIFT)
+#define UART_LSR_THRE 0x20
+
+/* 打印以 NUL 结尾的字符串，地址在 t4，返回地址在 t3。破坏 t1/a1/a2。
+ *
+ * ★ 每个字符都要先等 THR 空。原先直接写，FIFO 一满就丢字符 ——
+ *   现象是 trap 信息打到一半断掉（"mcause = 0x00 m" 就是这么来的），
+ *   而 trap 现场只打印一次，丢了没有第二次机会。
+ *   等待带计数上限：UART 若根本没配好，死等会把"发生了 trap"本身也吞掉。 */
 put_str:
 1:  lbu     t1, 0(t4)          /* 读字符串，来自内存，始终按字节 */
-    beqz    t1, 2f
-    /* 写 UART THR。THR 的寄存器索引为 0，字节偏移恒为 0，
-     * 不受 REG_SHIFT 影响；这里只需匹配访问宽度。 */
+    beqz    t1, 3f
+    li      a2, 100000
+2:
+#if BOARD_UART_32BIT
+    lw      a1, UART_LSR_OFF(t6)
+#else
+    lbu     a1, UART_LSR_OFF(t6)
+#endif
+    andi    a1, a1, UART_LSR_THRE
+    bnez    a1, 4f
+    addi    a2, a2, -1
+    bnez    a2, 2b
+4:
+    /* THR 的寄存器索引为 0，字节偏移恒为 0，不受 REG_SHIFT 影响；
+     * 这里只需匹配访问宽度。 */
 #if BOARD_UART_32BIT
     sw      t1, 0(t6)
 #else
@@ -138,9 +269,10 @@ put_str:
 #endif
     addi    t4, t4, 1
     j       1b
-2:  jr      t3
+3:  jr      t3
 
-/* 打印 t0 的 16 位十六进制，返回地址在 t3 */
+/* 打印 t0 的 16 位十六进制，返回地址在 t3。破坏 t1/t2/t5/a1/a2。
+ * 与 put_str 同样要等 THR 空，理由见上。 */
 put_hex:
     li      t1, 60
 1:  srl     t2, t0, t1
@@ -150,7 +282,18 @@ put_hex:
     addi    t2, t2, 'a' - 10
     j       3f
 2:  addi    t2, t2, '0'
-3:
+3:  li      a2, 100000
+5:
+#if BOARD_UART_32BIT
+    lw      a1, UART_LSR_OFF(t6)
+#else
+    lbu     a1, UART_LSR_OFF(t6)
+#endif
+    andi    a1, a1, UART_LSR_THRE
+    bnez    a1, 6f
+    addi    a2, a2, -1
+    bnez    a2, 5b
+6:
 #if BOARD_UART_32BIT
     sw      t2, 0(t6)
 #else
@@ -167,5 +310,19 @@ msg_epc:
     .asciz "\r\n  mepc   = 0x"
 msg_tval:
     .asciz "\r\n  mtval  = 0x"
+msg_mstatus:
+    .asciz "\r\n  mstatus= 0x"
+msg_ra:
+    .asciz "\r\n  ra     = 0x"
+msg_sp:
+    .asciz "\r\n  sp     = 0x"
+msg_mem:
+    .asciz "\r\n  [mepc] = 0x"
+msg_retry:
+    .asciz "\r\n  已重试 = 0x"
+msg_try:
+    .asciz "\r\n\r\n  >> fence.i 后返回原处重试 <<\r\n"
+msg_give:
+    .asciz "\r\n\r\n  >> 已达重试上限，停机 <<\r\n"
 msg_hint:
     .asciz "\r\n\r\n  mcause 最高位为 1 表示中断，否则是异常。常见异常码：\r\n    1=取指访问错  2=非法指令  5=load访问错  7=store访问错\r\n    4/6=地址未对齐  12/13/15=取指/load/store页错\r\n  mtval 通常是出错的地址或指令编码。\r\n  用 riscv-unknown-elf-addr2line -e qwen3_bm.elf <mepc> 定位到源码行。\r\n\r\n"

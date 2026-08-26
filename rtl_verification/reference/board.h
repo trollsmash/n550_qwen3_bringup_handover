@@ -222,6 +222,11 @@
 #define BOARD_MBOX_CYCLES_LO  (BOARD_MBOX_ADDR + 0x0C)  /* mcycle 低 32 位 */
 #define BOARD_MBOX_CYCLES_HI  (BOARD_MBOX_ADDR + 0x10)
 #define BOARD_MBOX_TOKENS     (BOARD_MBOX_ADDR + 0x20)  /* 生成的 token id 数组 */
+/* trap 现场：mcause / mepc / mtval / mstatus / ra / sp，各一个 32 位字。
+ * 由 start.S 的 trap handler 在打串口**之前**写入 —— 串口是最不可靠的一环，
+ * 若打印中途挂掉，host 后门仍能从这里把完整现场取走。
+ * 偏移 0x40 避开 L0 用到的 0x00..0x30 与 L2/L3 的字段。 */
+#define BOARD_MBOX_TRAP       (BOARD_MBOX_ADDR + 0x40)
 #define BOARD_MBOX_TEXT       (BOARD_MBOX_ADDR + 0x400) /* 解码后的 UTF-8 文本 */
 /* 两个区的容量。程序按这两个数截断，绝不越界往后写 ——
  * mailbox 之后就是权重区，写过界会把权重悄悄改掉，
