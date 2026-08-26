@@ -1,5 +1,5 @@
 # 文件清单（给人看的；机器校验用 checksums.md5）
-# 生成时间 2026-08-26 09:45
+# 生成时间 2026-08-26 16:11
 #
 # 注意：w.bin (1.11 GB) 不在本仓库，也不在下面的清单里。
 #       它的大小与 md5 见 L2_L3_fullmodel/GET_WEIGHTS.md，请单独核对。
@@ -8,7 +8,7 @@
 
         字节  文件
           5432  L0_bringup/bringup_s2c.bin
-         78547  L0_bringup/bringup_s2c.diss
+         78545  L0_bringup/bringup_s2c.diss
          64864  L0_bringup/bringup_s2c.elf
           1028  L0_bringup/bringup_s2c.sym
          11653  L0_bringup/checklist.html
@@ -211,10 +211,10 @@
           3549  L1_ame_vectors/golden_src/41_build_vectors.sh
          32090  L1_ame_vectors/index.json
            570  L2_L3_fullmodel/addresses.txt
-         17992  L2_L3_fullmodel/qwen3_s2c.bin
-        334610  L2_L3_fullmodel/qwen3_s2c.diss
-        198296  L2_L3_fullmodel/qwen3_s2c.elf
-          2932  L2_L3_fullmodel/qwen3_s2c.sym
+         18632  L2_L3_fullmodel/qwen3_s2c.bin
+        345634  L2_L3_fullmodel/qwen3_s2c.diss
+        202984  L2_L3_fullmodel/qwen3_s2c.elf
+          2963  L2_L3_fullmodel/qwen3_s2c.sym
        3409013  L2_L3_fullmodel/tok.bin
          11297  README.html
           6470  README.md
@@ -233,7 +233,7 @@
            795  src/src/kernels_scalar.c
           2620  src/src/kernels_tiled.c
          10297  src/src/main.c
-         22136  src/src/main_baremetal.c
+         23282  src/src/main_baremetal.c
          11548  src/src/main_qemu.c
           2072  src/src/ops.h
           8451  src/src/ops_rvv.c

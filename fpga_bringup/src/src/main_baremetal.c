@@ -135,6 +135,16 @@ static int uart_getc(void) {
 #endif
 }
 
+/* 只看标志、不取字符、不阻塞。用于在生成过程中探测有没有人按键。
+ * 每个 token 才查一次，开销可以忽略。 */
+static int uart_haschar(void) {
+#if BOARD_UART_32BIT
+    return (*BOARD_PTR(uint32_t, uart_addr(UART_LSR)) & UART_LSR_DR) != 0;
+#else
+    return (*BOARD_PTR(uint8_t, uart_addr(UART_LSR)) & UART_LSR_DR) != 0;
+#endif
+}
+
 /* 读一行，带回显与退格。返回字节数（不含结尾 NUL）。
  *
  * 中文经终端发来的是 UTF-8 多字节序列。回显逐字节发回去没问题 ——
@@ -339,7 +349,7 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
     uint64_t c0 = rd_mcycle();
     qwen3_forward_batch(m, g_chat_ids, n_in, 0);
     int next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
-    int got = 0;
+    int got = 0, aborted = 0;
     for (int i = 0; i < CHAT_MAX_GEN; i++) {
         if (next == QWEN3_EOS_TOKEN_ID_0 || next == QWEN3_EOS_TOKEN_ID_1) break;
         size_t plen;
@@ -355,6 +365,18 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
         /* 最后一个 token 不必再前向：那一整遍 1.1 GB 权重算出的 logits
          * 没有任何人会用到。 */
         if (i + 1 >= CHAT_MAX_GEN) break;
+        /* 按任意键中止。检查放在前向**之前** —— 放在之后的话，按键那一刻
+         * 还得再等一整轮 1.1 GB 的遍历才停得下来。
+         * 不挑特定键是有意的：ESC 与方向键的转义序列同头、Ctrl-C 是否发到
+         * 串口取决于终端配置，而现场那台机器什么设置往往到了才知道。 */
+        if (uart_haschar()) {
+            /* 排空缓冲：现场可能连按几下，残留字符会被下一次 readline
+             * 当成输入的开头。 */
+            while (uart_haschar()) (void)uart_getc();
+            aborted = 1;
+            P("  [已中止]");
+            break;
+        }
         qwen3_forward(m, next, n_in + i);
         next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
     }
@@ -376,7 +398,7 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
     (void)c0; (void)c1;
     P("（本平台 mcycle 非真实周期，未换算时间）");
 #endif
-    P("]\n");
+    P(aborted ? "，已中止]\n" : "]\n");
 }
 
 /* 把 mailbox 的关键字段读回来打一遍。
@@ -406,6 +428,7 @@ static void chat_repl(qwen3_t *m, qwen3_tok_t *tk) {
     mbox_set(BOARD_MBOX_STATUS, BOARD_ST_READY);
     P("\n============ 交互模式 ============\n");
     P("直接输入中文问题后回车；输入数字选预置问题；q 退出\n");
+    P("生成过程中按任意键可中止\n");
     for (int i = 0; i < N_PRESET; i++) {
         P("  "); I(i + 1); P(") "); P(g_presets[i]); P("\n");
     }
