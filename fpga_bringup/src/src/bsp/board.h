@@ -310,6 +310,29 @@
 #include <stddef.h>
 #define BOARD_PTR(t, a)  ((volatile t *)(uintptr_t)(a))
 
+/* 结束一段矩阵操作 —— 替代 mrelease。
+ *
+ * ★ 本核 RTL 对 mrelease 的实现有副作用，**会破坏 I-cache**：其后的取指
+ *   可能拿到错误内容，表现为随机位置的非法指令或访问错，而且故障点会随
+ *   代码布局漂移（改动别处、重新链接一次，崩的地方就换一个），极难定位。
+ *
+ * 改为直接把 mstatus.MS（位 [30:29]）写成 Clean(10)：语义上表示矩阵上下文
+ * 已结束、不再是脏的，与 mrelease 的意图一致，且没有那个副作用。
+ *
+ * 用**读-改-写**而不是 csrw 常量：mstatus 里还有 FS / VS 等域，
+ * 整写一个常量会把它们一并抹掉，后果是浮点或向量指令随即非法。
+ *
+ * MS=Clean 不影响后续继续使用 AME —— 只有 Off(00) 才会让矩阵指令非法，
+ * 下一条 AME 指令会自动把它带回 Dirty。 */
+#define BOARD_MSTATUS_MS_SHIFT 29
+static inline void ame_release(void) {
+    unsigned long ms;
+    __asm__ volatile("csrr %0, mstatus" : "=r"(ms));
+    ms = (ms & ~(3UL << BOARD_MSTATUS_MS_SHIFT))
+       | (2UL << BOARD_MSTATUS_MS_SHIFT);          /* 10 = Clean */
+    __asm__ volatile("csrw mstatus, %0" :: "r"(ms) : "memory");
+}
+
 /* 编译期把关：开了 cache 同步却没在 -march 里带 zicbom，
  * 汇编器只会吐一堆 "unrecognized opcode" 指向内联汇编，很难联想到是 march。
  * 这里直接报出人话。 */

@@ -255,7 +255,7 @@ static uint32_t ame_selftest(void) {
     __asm__ volatile("mfmacc.s.bf16 acc0,tr1,tr0");
     { register void *p __asm__("a0") = g_c; register long s __asm__("a1") = 4;
       __asm__ volatile("msce32 acc0,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
-    __asm__ volatile("mrelease");
+    ame_release();   /* 原为 mrelease，见 board.h 的说明 */
 
     /* ---- 退出 AME 后的缓存同步 ----
      * fence 让 AME 的写落到 DDR，再失效 L1D 里可能残留的旧拷贝。 */
@@ -318,7 +318,7 @@ static uint64_t perf_sample(void) {
     /* 把累加器写出来，防止编译器或硬件把整个循环当成无副作用而优化/跳过。 */
     { register void *p __asm__("a0") = g_pc; register long s __asm__("a1") = 128 * 4;
       __asm__ volatile("msce32 acc0,(%0),%1" :: "r"(p), "r"(s) : "memory"); }
-    __asm__ volatile("mrelease");
+    ame_release();   /* 原为 mrelease，见 board.h 的说明 */
     return t1 - t0;
 }
 
@@ -349,7 +349,7 @@ static uint64_t bw_ame_read(void) {
         __asm__ volatile("mlae16 tr0,(%0),%1" :: "r"(q), "r"(st) : "memory");
         p += 8192;
     }
-    __asm__ volatile("mrelease");
+    ame_release();   /* 原为 mrelease，见 board.h 的说明 */
     return rd_mcycle() - t0;
 }
 

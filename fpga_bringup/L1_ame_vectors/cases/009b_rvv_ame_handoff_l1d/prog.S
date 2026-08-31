@@ -162,7 +162,10 @@ _start:
     li      a0, C_ADDR
     li      a1, 512
     msce32  acc0,(a0),a1
-    mrelease
+    li      t0, (3 << 29)
+    csrc    mstatus, t0
+    li      t0, (2 << 29)
+    csrs    mstatus, t0
     fence   rw,rw
 
     # 阶段 A 的产物 C 由 AME 直接写 DDR，testbench 可不经 RVV 直接比对。

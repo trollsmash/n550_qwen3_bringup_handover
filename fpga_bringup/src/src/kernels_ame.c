@@ -174,7 +174,7 @@ static void gemm_impl(int tiled, float *c, const float *a, const uint16_t *b,
         }
     }
 
-    __asm__ volatile("mrelease");
+    ame_release();   /* 原为 mrelease，见 board.h 的说明 */
 
     /* ═══════ AME 退出后的缓存同步 ═══════
      *

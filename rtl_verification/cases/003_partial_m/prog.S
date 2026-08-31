@@ -76,7 +76,13 @@ _start:
     li      a0, C_ADDR
     li      a1, 512
     msce32  acc0,(a0),a1
-    mrelease
+    # 结束矩阵操作。原为 mrelease —— 本核 RTL 对该指令的实现有副作用，
+    # 会破坏 I-cache，其后的取指可能拿到错误内容（随机位置的非法指令，
+    # 且故障点随代码布局漂移）。改为直接写 mstatus.MS[30:29] = Clean(10)。
+    li      t0, (3 << 29)
+    csrc    mstatus, t0        # 清 MS 两位
+    li      t0, (2 << 29)
+    csrs    mstatus, t0        # MS = Clean
 
 #ifdef FOR_FPGA
     # AME 直写 DDR，CPU 侧需失效旧拷贝才能读到真值（详见函数注释）
