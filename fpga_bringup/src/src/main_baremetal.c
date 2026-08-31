@@ -275,12 +275,26 @@ static void mbox_text_append(const uint8_t *p, size_t n) {
     BOARD_FENCE();
 }
 
+/* decode 阶段是否把逐层进度打到串口。
+ *
+ * 这个进度条是 L2 调试期的救命功能 —— 真机上"卡在第 3 层"和"跑到第 27 层"
+ * 在串口外面看来都是没动静。但 demo 时它是纯噪声：一行 40 个字符，
+ * 而一个 token 通常只有 1~3 个字符，答案被切得读不成句子。
+ *
+ * 折中：prefill 保留（那是最长的一次等待，要让人知道没死机），
+ * decode 静音（答案连续吐出）。默认开，只有 chat_once 的生成循环
+ * 临时关掉 —— 回归模式与其他路径的可观测性一点不减。 */
+static int g_show_layer = 1;
+
 void qwen3_on_layer(int layer, int n_layers) {
+    /* mailbox 无条件更新：host 侧要看进度不该受串口开关影响，
+     * 而这正是串口静音时唯一还能看到"跑到哪一层"的出口。 */
+    mbox_set(BOARD_MBOX_LAYER, (uint32_t)layer);
+    if (!g_show_layer) return;
     if (layer == 0) putc_('[');
     putc_('.');
     if (layer % 5 == 4 && layer != n_layers - 1) putc_('|');
     if (layer == n_layers - 1) putc_(']');
-    mbox_set(BOARD_MBOX_LAYER, (uint32_t)layer);
 }
 
 /* 停机。QEMU 上写 sifive_test 让进程退出并带上退出码；
@@ -365,8 +379,11 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
     }
 
     uint64_t c0 = rd_mcycle();
-    qwen3_forward_batch(m, g_chat_ids, n_in, 0);
+    qwen3_forward_batch(m, g_chat_ids, n_in, 0);   /* prefill：进度条照常 */
     int next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
+    /* 进度条到此为止。换行让答案从行首开始，读起来才是一段话。 */
+    g_show_layer = 0;
+    P("\n");
     int got = 0, aborted = 0;
     for (int i = 0; i < limit; i++) {
         if (next == QWEN3_EOS_TOKEN_ID_0 || next == QWEN3_EOS_TOKEN_ID_1) break;
@@ -398,6 +415,7 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
         qwen3_forward(m, next, n_in + i);
         next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
     }
+    g_show_layer = 1;          /* 恢复，别影响下一轮 prefill 与其他路径 */
     uint64_t c1 = rd_mcycle();
     mbox_set(BOARD_MBOX_CYCLES_LO, (uint32_t)(c1 - c0));
     mbox_set(BOARD_MBOX_CYCLES_HI, (uint32_t)((c1 - c0) >> 32));

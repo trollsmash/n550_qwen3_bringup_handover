@@ -83,7 +83,7 @@ td code, th code { white-space:nowrap; }
 <ul><li><code>L2_L3_fullmodel/</code> 的 <code>w.bin</code> 是 <strong>row 布局</strong>，1192100096 字节</li><li>本目录的 <code>w.bin</code> 是 <strong>tile-major</strong>，1192433664 字节</li></ul>
 <p>跨目录混搭会在启动时报 <code>QWEN3_ERR_SIZE</code> 停下。这是<strong>明确的错误行</strong>， 不是 trap，串口上一眼能认出来。</p>
 <h2>回答长度</h2>
-<p>每次回答最多 <strong>64 个 token</strong>（中文约 4.7 字节/token，合 96 个汉字左右）， 模型吐出 EOS 会提前停，短问题不会硬凑满。</p>
+<p>每次回答最多 <strong>128 个 token</strong>（中文约 4.7 字节/token，合 192 个汉字左右）， 模型吐出 EOS 会提前停，短问题不会硬凑满。</p>
 <p>这个上限在编译时注入。<code>L2_L3_fullmodel/</code> 的固件用的是源码默认值 <strong>1</strong> —— 那是给 QEMU 定的（那里每多一个 token 就要再遍历一遍 1.1 GB 权重）， <strong>问一句只答一两个字</strong>。要看完整回答，用本目录这一份。</p>
 <p>生成过程中按任意键可中止，不必等满。</p>
 <h2>关于性能：现在不会更快</h2>

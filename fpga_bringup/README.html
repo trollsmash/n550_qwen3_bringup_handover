@@ -71,7 +71,7 @@ td code, th code { white-space:nowrap; }
 <body>
 <main>
 <h1>Qwen3-0.6B on RISC-V —— FPGA 上板交付包</h1>
-<blockquote><p>由 <code>tools/44_pack_fpga.sh</code> 生成，地址取自 <code>src/bsp/board.h</code>。 生成时间：2026-08-31 13:59</p></blockquote>
+<blockquote><p>由 <code>tools/44_pack_fpga.sh</code> 生成，地址取自 <code>src/bsp/board.h</code>。 生成时间：2026-08-31 16:39</p></blockquote>
 <p>板子：S2C，DDR <code>0x80000000</code>–<code>0xEFFFFFFF</code>， 串口 <code>0x20100000</code>（16550, 8N1），CPU/AME 40 MHz。</p>
 <hr>
 <h2>按这个顺序走，别跳级</h2>
@@ -96,7 +96,7 @@ td code, th code { white-space:nowrap; }
 <div class='tablewrap'><table><thead><tr><th>加载了什么</th><th>程序做什么</th><th>用途</th></tr></thead><tbody><tr><td>只有 <code>w.bin</code></td><td><strong>回归模式</strong>：固定 4 个 token 跑一遍，与黄金数据自检</td><td>L2。不依赖分词器，出问题范围更小</td></tr><tr><td>再加 <code>tok.bin</code></td><td><strong>交互模式</strong>：串口输入中文，逐 token 吐回来</td><td>L3，也是 demo 形态</td></tr></tbody></table></div>
 <p><strong>L2 先不要加载 <code>tok.bin</code></strong>，过了再加。</p>
 <blockquote><p><strong>⚠ 本目录的固件每次只回答 1 个 token</strong> —— 那是源码默认值，为 QEMU 定的 （那里每多一个 token 就要再遍历一遍 1.1 GB 权重）。所以 L3 能验证的是 <strong>端到端形态跑得通</strong>：中文进得去、分词器认得出、答案吐得回来。</p>
-<p>要看完整回答，用 <a href="L4_demo/"><code>L4_demo/</code></a>，那一份编译时注入了 64 token（约 96 个汉字）。</p></blockquote>
+<p>要看完整回答，用 <a href="L4_demo/"><code>L4_demo/</code></a>，那一份编译时注入了 128 token（约 192 个汉字）。</p></blockquote>
 <h4>交互模式怎么用</h4>
 <p>程序启动后停在 <code>&gt;</code> 提示符，直接在串口终端里打字：</p>
 <pre><code>============ 交互模式 ============
