@@ -29,51 +29,57 @@ BOARD=s2c tools/build_riscv.sh bringup                # L0  -> bringup_s2c.bin
 KERNEL=ame OPS=rvv BOARD=s2c tools/build_riscv.sh baremetal   # L2/L3 -> qwen3_s2c.bin
 ```
 
-## 可选：tile-major 权重布局（访存优化，需 RTL 配合）
+## 权重布局：本包含 row 与 tile-major 两套
 
-AME 装载一个 tile 要读 128 行、每行 32 个 BF16 = 64 字节。权重按 PyTorch 原始的
- 行优先存放时，**行间跨度是 K x 2 = 2048 字节**（down_proj 是 6144）——
-读 64 B 就要跳过 2 KB，AXI 侧只能发 128 个单拍事务，无从合并。
+AME 装载一个 tile 要读 128 行、每行 32 个 BF16 = 64 字节。若权重按 PyTorch 原始的
+`[N,K]` 行优先存放，**行间跨度是 K x 2 = 2048 字节**（down_proj 是 6144）——
+读 64 B 就得跳过 2 KB，AXI 侧只能发 128 个单拍事务。
 
-把权重按 tile 重排后，行间跨度变成 **64 字节**，整个 tile 是连续的 8 KB：
+tile-major 把行间跨度压成 **64 字节**：一个 tile 是连续的 8 KB，
+每个 tile 还落在 4 KB 边界上（张量对齐提到 4096，AXI burst 不得跨 4 KB 边界，
+对齐后正好切成两段而非三段）。文件因此比行优先版大约 326 KB。
+
+**⚠ 现在这个布局还拿不到收益**：只有当 RTL 支持「stride 等于行宽时合并成 burst」，
+连续的访存模式才会变成长 burst。在那之前硬件仍按单拍发，速度与行优先相同。
+提前切过来是让软件侧先就位 —— RTL 一到位直接见效，不用再改任何代码。
+
+### 固件与权重必须成套
+
+有两处校验，性质不同：
+
+1. **布局**标记在 header 偏移 76，`qwen3_init` 运行时读并校验，
+   不匹配报 `QWEN3_ERR_LAYOUT`。tile 版只有 AME kernel 认识，
+   喂给标量/RVV kernel 会直接被拒。
+2. **总长**由构建脚本按权重文件实测后编进固件（`-DWEIGHTS_SIZE`），
+   `qwen3_init` 逐张量走完后核对 `c.pos != blob_size`，
+   不匹配报 `QWEN3_ERR_SIZE`。**这一条决定了固件不能跨布局复用**：
+   两种布局的文件大小差约 326 KB。
+
+于是交付包里两套各自成目录，**不要交叉取文件**：
+
+| 目录 | 固件 | 权重 |
+|---|---|---|
+| `L2_L3_fullmodel/` | 按 row 大小编译 | row 布局 |
+| `L4_demo/` | 按 tile 大小编译 | tile-major |
+
+两种错配都是启动时的**明确错误行**，不是 trap，串口上一眼能认出来。
+
+### 自己重新编译两套
 
 ```bash
+# row（L2/L3）
+python tools/02_export_weights.py                 # -> golden/qwen3-0.6b-bf16.bin
+KERNEL=ame OPS=rvv BOARD=s2c tools/build_riscv.sh baremetal
+
+# tile-major（L4）
 python tools/02_export_weights.py --layout tile   # -> golden/qwen3-0.6b-bf16-tile.bin
-KERNEL=ame OPS=rvv BOARD=s2c WEIGHTS=golden/qwen3-0.6b-bf16-tile.bin \n    tools/build_riscv.sh baremetal
+KERNEL=ame OPS=rvv BOARD=s2c     WEIGHTS=golden/qwen3-0.6b-bf16-tile.bin tools/build_riscv.sh baremetal
 ```
 
-**⚠ 只有当 RTL 支持「stride 等于行宽时合并成 burst」，这个布局才有收益**；
-否则访存模式虽然连续，硬件仍按单拍发，性能与行优先一样。两边都到位才有效果。
+构建脚本按权重 header 里的布局给产物具名（`qwen3_s2c-row.bin` /
+`qwen3_s2c-tile.bin`），两套可以并存，不会互相覆盖。
 
-两种布局的权重**不能混用**：布局标记在文件 header 偏移 76， 会校验，
-不匹配时立刻报错而不是算出垃圾。tile 版文件大约 326 KB（张量对齐从 128 B 提到
-4096 B，好让每个 8 KB 的 tile 落在 4 KB 边界上 —— AXI burst 不得跨 4 KB 边界，
-对齐后正好切成两段而非三段）。
-
-数值上两种布局完全等价，已在 QEMU 上用带黄金数据的回归模式验证过。
-
-```
-
-每次构建除了 `.bin` 还会产出三个文件，烧录只用 `.bin`，另外三个留着排障：
-
-| 文件 | 用途 |
-|---|---|
-| `.elf` | 带完整调试信息（`-g3 -gdwarf-4`），GDB / addr2line 用 |
-| `.diss` | 反汇编与 C 源码交织。串口打出 `*** TRAP ***` 时，拿 `mepc` 在这里搜地址，直接看到是哪条指令、哪一行 C |
-| `.sym` | 按地址排序的符号表，先看 `mepc` 落在哪个函数 |
-
-调试信息只存在于 `.elf`，`objcopy` 出来的 `.bin` 不受影响，**烧录镜像大小与不带调试信息时完全一致**。
-
-`tools/env.sh` 里两处按你们的环境改：`CROSS`（工具链前缀）和
-`RISCV_BUILD`（产物目录）。ISA 串**不要动**：
-
-```
-rv64gcv_zfh_zfbfmin_zvfh_zvfbfmin_zvfbfwma_xewmatrix1p0_zicbom_zicbop_zicboz_xdcache
-```
-
-少任何一段都会出事，而且症状具有迷惑性：
-少 `zvfbfmin` → `vfwcvtbf16` 非法指令；少 `zicbom`/`xdcache` → 缓存同步编不过；
-少 `xewmatrix1p0` → 所有 AME 指令不认。
+两种布局数值完全等价，已在 QEMU 上用带黄金数据的回归模式逐 token 验证过。
 
 ## 你最可能要改的四处
 

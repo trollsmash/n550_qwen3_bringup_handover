@@ -1,5 +1,5 @@
 
-/home/dlht/qwen3-build/qwen3_bm.elf:     file format elf64-littleriscv
+/home/dlht/qwen3-build/qwen3_bm-row.elf:     file format elf64-littleriscv
 
 
 Disassembly of section .text:
@@ -5293,7 +5293,7 @@ void qwen3_main(void) {
     800027aa:	9b250513          	addi	a0,a0,-1614 # 80004158 <msg_hint+0x546>
     800027ae:	d0dff0ef          	jal	800024ba <P>
     800027b2:	08311537          	lui	a0,0x8311
-    800027b6:	05250513          	addi	a0,a0,82 # 8311052 <_stack_size+0x82d1052>
+    800027b6:	24150513          	addi	a0,a0,577 # 8311241 <_stack_size+0x82d1241>
     800027ba:	d5bff0ef          	jal	80002514 <X>
     800027be:	00002517          	auipc	a0,0x2
     800027c2:	9a250513          	addi	a0,a0,-1630 # 80004160 <msg_hint+0x54e>
