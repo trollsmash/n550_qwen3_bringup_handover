@@ -97,6 +97,24 @@ WSRC="${WEIGHTS:-golden/qwen3-0.6b-bf16.bin}"
 WSIZE_DEF=""
 [ -f "$WSRC" ] && WSIZE_DEF="-DWEIGHTS_SIZE=$(stat -c%s "$WSRC")UL"
 
+# 固件把权重总长编进了二进制，qwen3_init 会严格核对（c.pos != blob_size ->
+# QWEN3_ERR_SIZE），所以「固件 + 权重」必须成套，不能混搭。
+# 产物按布局具名让两套并存，打包脚本才能一次取到配对的那一份；
+# 只用一个固定名的话，后编的会盖掉先编的，而且盖完看不出来。
+# 布局从 header 偏移 76 读 —— 文件名可以改，header 不会。
+WTAG=row
+if [ -f "$WSRC" ]; then
+    case "$(od -An -tu4 -j76 -N4 "$WSRC" 2>/dev/null | tr -d ' ')" in
+        1) WTAG=tile ;;
+    esac
+fi
+
+# 对话模式每次回答的 token 上限。源码里默认 1 —— 那是给 QEMU 的，
+# 那里每多一个 token 就要再遍历一遍 1.1 GB 权重。真机 demo 要说完整的话，
+# 用 CHAT_GEN=N 注入。源码侧按 KV cache 余量做了钳制，设大不会越界。
+CHAT_GEN_DEF=""
+[ -n "${CHAT_GEN:-}" ] && CHAT_GEN_DEF="-DCHAT_MAX_GEN=$CHAT_GEN"
+
 case "${1:-build}" in
 build) build ;;
 run)
@@ -119,19 +137,24 @@ baremetal)
     # start.S 也 include 它，所以 UART 基址只存在一份。
     board_def
     echo "== 交叉编译 bare-metal (board=${BOARD:-qemu}, kernel=$KERNEL, ops=$OPS) =="
-    rm -f "$OUT/qwen3_bm.elf"
+    BM_ELF="$OUT/qwen3_bm-$WTAG.elf"
+    rm -f "$BM_ELF"
     # -Isrc 是为了让 start.S 能 #include "board.h"
     # shellcheck disable=SC2086
-    ${CROSS}gcc $RISCV_CFLAGS -Isrc $BOARD_DEF $WSIZE_DEF -ffreestanding -nostdlib -nostartfiles \
+    ${CROSS}gcc $RISCV_CFLAGS -Isrc $BOARD_DEF $WSIZE_DEF $CHAT_GEN_DEF -ffreestanding -nostdlib -nostartfiles \
         -T src/bsp/qemu_virt.ld src/bsp/start.S \
         src/qwen3.c src/tokenizer.c src/kernels_${KERNEL}.c src/ops_${OPS}.c \
         src/main_baremetal.c $BSP \
-        -o "$OUT/qwen3_bm.elf" -lm 2>&1 | grep -viE "LOAD segment with RWX" || true
-    [ -f "$OUT/qwen3_bm.elf" ] || { echo "链接失败" >&2; exit 1; }
-    emit_debug "$OUT/qwen3_bm.elf"
-    printf "   %s  (%.1f KB)\n" "$OUT/qwen3_bm.elf" \
-        "$(echo "$(stat -c%s "$OUT/qwen3_bm.elf")/1024" | bc -l)"
-    printf "   %s  (反汇编，按 mepc 定位用)\n" "$OUT/qwen3_bm.diss"
+        -o "$BM_ELF" -lm 2>&1 | grep -viE "LOAD segment with RWX" || true
+    [ -f "$BM_ELF" ] || { echo "链接失败" >&2; exit 1; }
+    emit_debug "$BM_ELF"
+    # 固定名指向本次构建，既有引用（QEMU 运行、旧脚本）不受具名化影响。
+    ln -sf "$(basename "$BM_ELF")"             "$OUT/qwen3_bm.elf"
+    ln -sf "$(basename "${BM_ELF%.elf}.diss")" "$OUT/qwen3_bm.diss"
+    ln -sf "$(basename "${BM_ELF%.elf}.sym")"  "$OUT/qwen3_bm.sym"
+    printf "   %s  (%.1f KB, 权重布局 %s, 回答上限 %s token)\n" "$BM_ELF" \
+        "$(echo "$(stat -c%s "$BM_ELF")/1024" | bc -l)" "$WTAG" "${CHAT_GEN:-1 默认}"
+    printf "   %s  (反汇编，按 mepc 定位用)\n" "${BM_ELF%.elf}.diss"
 
     W="$OUT/w-$(basename "$WSRC" .bin).bin"
     [ -f "$W" ] || cp "$WSRC" "$W"
@@ -146,11 +169,13 @@ baremetal)
     # 这里改为产出 host 经 PCIe 后门要写的三块裸镜像，并打印地址表。
     # ELF 不能直接灌进 DDR —— 必须 objcopy 成 raw binary。
     if [ "${BOARD:-qemu}" = "s2c" ]; then
-        ${CROSS}objcopy -O binary --gap-fill 0 "$OUT/qwen3_bm.elf" "$OUT/qwen3_s2c.bin"
+        S2C_BIN="$OUT/qwen3_s2c-$WTAG.bin"
+        ${CROSS}objcopy -O binary --gap-fill 0 "$BM_ELF" "$S2C_BIN"
+        ln -sf "$(basename "$S2C_BIN")" "$OUT/qwen3_s2c.bin"
         echo
-        echo "== S2C 部署镜像 =="
+        echo "== S2C 部署镜像 (权重布局 $WTAG) =="
         printf "  %-16s -> %s   %12s B   程序\n" \
-            "qwen3_s2c.bin" "$(bhex BOARD_DRAM_BASE)"      "$(stat -c%s "$OUT/qwen3_s2c.bin")"
+            "$(basename "$S2C_BIN")" "$(bhex BOARD_DRAM_BASE)" "$(stat -c%s "$S2C_BIN")"
         printf "  %-16s -> %s   %12s B   权重\n" \
             "w.bin"         "$(bhex BOARD_WEIGHTS_ADDR)"   "$(stat -c%s "$W")"
         printf "  %-16s -> %s   %12s B   分词器\n" \
@@ -175,12 +200,24 @@ baremetal)
     # "权重 magic 不对"，看起来却像加载没生效。
     WA="$(bhex BOARD_WEIGHTS_ADDR)"
     TA="$(bhex BOARD_TOKENIZER_ADDR)"
-    echo "== qemu-system-riscv64 (权重@$WA, tokenizer@$TA) =="
-    time "$QEMU_SYSTEM_RISCV64" -machine virt -nographic -bios none -m 2G \
-        -cpu "$QEMU_CPU_FULL" \
-        -kernel "$OUT/qwen3_bm.elf" \
-        -device loader,file="$W",addr="$WA" \
-        -device loader,file="$T",addr="$TA"
+    # NO_TOK=1 不灌分词器 —— 程序转入回归模式（固定 4 token 与黄金数据
+    # 逐一自检），这是在 QEMU 上验证数值的唯一可行路径。
+    # 带分词器时程序进的是交互模式，会停在串口等一行输入，而 QEMU 这边
+    # 没有人打字，于是永远挂着 —— 看起来像"跑得很慢"，其实根本不会结束。
+    if [ "${NO_TOK:-0}" = 1 ]; then
+        echo "== qemu-system-riscv64 (权重@$WA, 无分词器 -> 回归模式) =="
+        time "$QEMU_SYSTEM_RISCV64" -machine virt -nographic -bios none -m 2G \
+            -cpu "$QEMU_CPU_FULL" \
+            -kernel "$OUT/qwen3_bm.elf" \
+            -device loader,file="$W",addr="$WA"
+    else
+        echo "== qemu-system-riscv64 (权重@$WA, tokenizer@$TA) =="
+        time "$QEMU_SYSTEM_RISCV64" -machine virt -nographic -bios none -m 2G \
+            -cpu "$QEMU_CPU_FULL" \
+            -kernel "$OUT/qwen3_bm.elf" \
+            -device loader,file="$W",addr="$WA" \
+            -device loader,file="$T",addr="$TA"
+    fi
     ;;
 bringup)
     # L0：上板第一个程序。不依赖权重与分词器，几 KB，加载一秒。

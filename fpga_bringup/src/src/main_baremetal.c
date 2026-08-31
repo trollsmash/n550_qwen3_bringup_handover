@@ -190,9 +190,14 @@ static const int g_prompt[] = { 108386, 37945, 109432, 107828 };
  * 真机上可以调大 —— 那里 AME 是并行阵列，不是这个量级。 */
 #define MAX_GEN  5
 
-/* 对话模式生成几个 token。默认 1：要证明的是端到端形态跑得通，
- * 而每多一个 token 就要把 1.1 GB 权重再完整遍历一遍。
- * 真机上调大，编译时 -DCHAT_MAX_GEN=N 即可。 */
+/* 对话模式每次回答最多生成几个 token（是上限，遇 EOS 会提前停）。
+ * 单位是 token 不是字：实测中文约 4.7 字节/token ≈ 1.5 个汉字。
+ *
+ * 默认 1 是为 QEMU 定的 —— 那里每多一个 token 就要把 1.1 GB 权重
+ * 再完整遍历一遍，跑长回答没法用。真机由构建脚本注入
+ * -DCHAT_MAX_GEN=N（见 tools/build_riscv.sh 的 CHAT_GEN）。
+ *
+ * 设多大不必算安全边界：下面的生成循环会按 KV cache 的剩余容量钳制。 */
 #ifndef CHAT_MAX_GEN
 #define CHAT_MAX_GEN 1
 #endif
@@ -346,11 +351,24 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
     mbox_set(BOARD_MBOX_NTOKEN, 0);
     mbox_text_reset();
 
+    /* KV cache 只有 QWEN3_MAX_SEQ 个位置，而 qwen3_forward_batch 只校验
+     * 批大小、不校验 pos —— 写到 pos >= MAX_SEQ 会跨进下一层的 KV 区域，
+     * 不报错也不 trap，只是后面几层读到污染的 K/V，输出变成胡话。
+     * 这种错查起来极贵（看着像模型算错，其实是内存），所以在这里挡住：
+     * 让 CHAT_MAX_GEN 表达"想要多少"，剩余容量不够时自动收敛。 */
+    int budget = QWEN3_MAX_SEQ - n_in;
+    int limit  = CHAT_MAX_GEN < budget ? CHAT_MAX_GEN : budget;
+    if (limit <= 0) {
+        P("  [prompt 已占满 KV cache（"); I(n_in);
+        P("/"); I(QWEN3_MAX_SEQ); P(" token），没有生成空间，换短一点的问题]\n");
+        return;
+    }
+
     uint64_t c0 = rd_mcycle();
     qwen3_forward_batch(m, g_chat_ids, n_in, 0);
     int next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
     int got = 0, aborted = 0;
-    for (int i = 0; i < CHAT_MAX_GEN; i++) {
+    for (int i = 0; i < limit; i++) {
         if (next == QWEN3_EOS_TOKEN_ID_0 || next == QWEN3_EOS_TOKEN_ID_1) break;
         size_t plen;
         const uint8_t *piece = qwen3_tok_piece(tk, next, &plen);
@@ -364,7 +382,7 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
         mbox_set(BOARD_MBOX_NTOKEN, (uint32_t)got);
         /* 最后一个 token 不必再前向：那一整遍 1.1 GB 权重算出的 logits
          * 没有任何人会用到。 */
-        if (i + 1 >= CHAT_MAX_GEN) break;
+        if (i + 1 >= limit) break;
         /* 按任意键中止。检查放在前向**之前** —— 放在之后的话，按键那一刻
          * 还得再等一整轮 1.1 GB 的遍历才停得下来。
          * 不挑特定键是有意的：ESC 与方向键的转义序列同头、Ctrl-C 是否发到
@@ -388,6 +406,10 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
     /* 现场把速度算出来。这个数比幻灯片上任何数字都有说服力，
      * 因为它是当场跑出来的。 */
     P("\n\n  [prompt "); I(n_in); P(" token，生成 "); I(got); P(" token");
+    if (limit < CHAT_MAX_GEN) {
+        /* 说清楚是容量到顶而不是模型自己收尾 —— 两者现象一样。 */
+        P("（受 KV cache 余量限制，上限收到 "); I(limit); P("）");
+    }
 #if BOARD_CPU_HZ
     {
         unsigned long ms = (unsigned long)((c1 - c0) / (BOARD_CPU_HZ / 1000));

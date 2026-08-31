@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>L4 —— tile-major 权重的完整 demo</title>
+<style>
+:root {
+  --bg:#ffffff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0;
+  --code-bg:#f6f8fa; --code-fg:#1f2328; --accent:#0969da;
+  --quote-bar:#d1d9e0; --th-bg:#f6f8fa; --mark:#fff8c5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#3d444d;
+    --code-bg:#161b22; --code-fg:#e6edf3; --accent:#4493f8;
+    --quote-bar:#3d444d; --th-bg:#161b22; --mark:#3f2e00;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; padding:2.5rem 1.25rem 6rem; background:var(--bg); color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",
+              "PingFang SC","Hiragino Sans GB",sans-serif;
+  font-size:16px; line-height:1.7;
+  -webkit-text-size-adjust:100%;
+}
+main { max-width:900px; margin:0 auto; }
+h1,h2,h3 { line-height:1.3; margin:2.2em 0 .8em; font-weight:600; }
+h1 { font-size:1.9rem; margin-top:0; padding-bottom:.35em; border-bottom:1px solid var(--line); }
+h2 { font-size:1.4rem; padding-bottom:.3em; border-bottom:1px solid var(--line); }
+h3 { font-size:1.15rem; }
+p { margin:.9em 0; }
+a { color:var(--accent); text-decoration:none; }
+a:hover { text-decoration:underline; }
+hr { border:0; border-top:1px solid var(--line); margin:2.5em 0; }
+strong { font-weight:650; }
+code {
+  background:var(--code-bg); color:var(--code-fg); border-radius:5px;
+  padding:.15em .38em; font-size:.88em;
+  font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+pre {
+  background:var(--code-bg); border:1px solid var(--line); border-radius:8px;
+  padding:.9rem 1rem; overflow-x:auto; margin:1.1em 0; line-height:1.55;
+}
+pre code { background:none; padding:0; font-size:.85rem; }
+blockquote {
+  margin:1.2em 0; padding:.15em 1.1em; color:var(--muted);
+  border-left:4px solid var(--quote-bar);
+}
+blockquote p { margin:.6em 0; }
+ul,ol { margin:.9em 0; padding-left:1.6em; }
+li { margin:.4em 0; }
+li > p { margin:.35em 0; }
+/* 宽表格自己横向滚动，页面本身绝不横向滚动 */
+.tablewrap { overflow-x:auto; margin:1.3em 0; }
+table { border-collapse:collapse; width:100%; font-size:.93rem; }
+th,td { border:1px solid var(--line); padding:.5em .75em; text-align:left; vertical-align:top; }
+th { background:var(--th-bg); font-weight:650; white-space:nowrap; }
+td code, th code { white-space:nowrap; }
+.meta { color:var(--muted); font-size:.85rem; margin-top:3rem;
+        padding-top:1rem; border-top:1px solid var(--line); }
+@media print {
+  body { padding:0; font-size:11pt; }
+  pre,.tablewrap { break-inside:avoid; }
+  h1,h2,h3 { break-after:avoid; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>L4 —— tile-major 权重的完整 demo</h1>
+<p>本目录是<strong>自包含</strong>的一套上板软件：固件、权重、分词器、地址表齐全， 不需要从 <code>L2_L3_fullmodel/</code> 拿任何文件。</p>
+<h2>文件</h2>
+<div class='tablewrap'><table><thead><tr><th>文件</th><th>写入地址</th><th>说明</th></tr></thead><tbody><tr><td><code>qwen3_s2c.bin</code></td><td>0x80000000</td><td>固件（按 tile 权重的大小编译）</td></tr><tr><td><code>w.bin</code></td><td>0x88000000</td><td>权重，<strong>tile-major 布局</strong></td></tr><tr><td><code>tok.bin</code></td><td>0xD0000000</td><td>分词器</td></tr></tbody></table></div>
+<p><code>qwen3_s2c.elf</code> / <code>.diss</code> / <code>.sym</code> 是调试用，不写进板子。 真出了 TRAP，用 <code>riscv-unknown-elf-addr2line -e qwen3_s2c.elf &lt;mepc&gt;</code> 定位。</p>
+<h2>上板</h2>
+<ol><li>三块经 PCIe 后门写进 DDR（地址见上表，或 <code>addresses.txt</code>）</li><li>放开复位</li><li>串口 0x20100000，115200 8N1，终端编码设 UTF-8</li><li>等 <code>&gt;</code> 提示符 —— 出现即表示权重校验与分词器加载都过了</li></ol>
+<p>权重 1.11 GB 写入耗时较长，期间没有串口输出属正常。 host 侧也可以轮询 mailbox 0x87F00000，读到 <code>0xB0000002</code> 即就绪，不必靠猜。</p>
+<h2>⚠ 不要和 L2_L3_fullmodel/ 混用</h2>
+<p>固件把权重总长编进了二进制，<code>qwen3_init</code> 会严格核对：</p>
+<ul><li><code>L2_L3_fullmodel/</code> 的 <code>w.bin</code> 是 <strong>row 布局</strong>，1192100096 字节</li><li>本目录的 <code>w.bin</code> 是 <strong>tile-major</strong>，1192433664 字节</li></ul>
+<p>跨目录混搭会在启动时报 <code>QWEN3_ERR_SIZE</code> 停下。这是<strong>明确的错误行</strong>， 不是 trap，串口上一眼能认出来。</p>
+<h2>回答长度</h2>
+<p>每次回答最多 <strong>64 个 token</strong>（中文约 4.7 字节/token，合 96 个汉字左右）， 模型吐出 EOS 会提前停，短问题不会硬凑满。</p>
+<p>这个上限在编译时注入。<code>L2_L3_fullmodel/</code> 的固件用的是源码默认值 <strong>1</strong> —— 那是给 QEMU 定的（那里每多一个 token 就要再遍历一遍 1.1 GB 权重）， <strong>问一句只答一两个字</strong>。要看完整回答，用本目录这一份。</p>
+<p>生成过程中按任意键可中止，不必等满。</p>
+<h2>关于性能：现在不会更快</h2>
+<p>tile-major 把 GEMM 的行间跨度从 <code>K×2</code>（2048 或 6144 字节）压成 64 字节， 整个 tile 连续 8 KB 且 4 KB 对齐 —— 8 KB 恰好切成两个 ARLEN=63 的 burst， 不跨 4 KB 边界。</p>
+<p><strong>但这套收益要 RTL 支持「stride 等于数据位宽时合并 burst」才能兑现。</strong> 在那之前，L4 与 L3 的 token/s 应当基本一致；若明显更慢，那是 bug，请反馈。</p>
+<p>现在就把它放上板，是为了确认这个布局在真机上数值正确 —— RTL 改完之后直接换目录就能见效，不用再等一轮软件。</p>
+<h2>判据</h2>
+<p>与 L3 相同：能在 <code>&gt;</code> 提示符下输入中文、得到中文回答即通过。 逐 token 的数值自检在 L2 做（不加载 <code>tok.bin</code> 即进回归模式）。</p>
+<p class="meta">由 tools/42_md2html.py 从 README.md 生成。
+内容以 Markdown 源文件为准；改了源文件请重新生成本页。</p>
+</main>
+</body>
+</html>
