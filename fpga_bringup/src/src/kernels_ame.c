@@ -45,6 +45,31 @@
 #define AME_A_MAX ((size_t)QWEN3_MAX_SEQ * QWEN3_INTERMEDIATE_SIZE)
 static uint16_t g_abuf[AME_A_MAX] __attribute__((aligned(64)));
 
+/* ═══════ AME 指令封装 ═══════
+ *
+ * 矩阵寄存器名（tr0..tr3 / acc0..acc3）在编码里是立即数字段，只能是
+ * 字面量，所以走宏而不是函数参数。
+ *
+ * ★ 地址与 stride 用通用的 "r" 约束，不再钉死 a0/a1。
+ *   曾经钉死是因为怀疑 (a1,t5) 这类组合会被判非法指令 —— 那个推断
+ *   后来被推翻了：真根因是 RTL 对 mrelease 的实现破坏 I-cache，取指
+ *   取到脏数据，与寄存器分配无关。mrelease 已从全项目移除。
+ *   双缓冲要同时持有两组地址与 stride，钉死两个寄存器会逼出大量
+ *   多余的搬运指令，所以这里一并解开。
+ *   若真机上重新出现 mcause=2，先怀疑这里，退回办法见文件末尾。 */
+#define AME_LOAD_A(tr, ptr, stride)                                          \
+    __asm__ volatile("mlae16 " tr ",(%0),%1"                                 \
+                     :: "r"(ptr), "r"((long)(stride)) : "memory")
+#define AME_LOAD_B(tr, ptr, stride)                                          \
+    __asm__ volatile("mlbe16 " tr ",(%0),%1"                                 \
+                     :: "r"(ptr), "r"((long)(stride)) : "memory")
+/* acc += B · Aᵀ —— 操作数顺序是 (md, B, A)，写反会得到转置结果。 */
+#define AME_MFMACC(acc, trb, tra)                                            \
+    __asm__ volatile("mfmacc.s.bf16 " acc "," trb "," tra)
+#define AME_STORE_C(acc, ptr, stride)                                        \
+    __asm__ volatile("msce32 " acc ",(%0),%1"                                \
+                     :: "r"(ptr), "r"((long)(stride)) : "memory")
+
 /* 清零累加器。作用范围由当前的 mtilem × mtilen 决定，故须先 set_tile。 */
 static inline void acc_clear(void) {
     __asm__ volatile("mzero acc0");
@@ -133,44 +158,70 @@ static void gemm_impl(int tiled, float *c, const float *a, const uint16_t *b,
             set_tile(mm, nn, AME_TILE_K);
             acc_clear();
 
-            for (int k0 = 0; k0 < K; k0 += AME_TILE_K) {
-                const int kk = (K - k0 < AME_TILE_K) ? (K - k0) : AME_TILE_K;
-                set_tile(mm, nn, kk);
+            /* A 的地址只跟 k0 走，与 n0 无关；B 的按布局取。 */
+            #define AP(kk0) (g_abuf + (size_t)m0 * K + (kk0))
+            #define BP(kk0) (tiled ? b + b_tile_off(n0, (kk0), K)          \
+                                   : b + (size_t)n0 * K + (kk0))
 
-                const uint16_t *ap = g_abuf + (size_t)m0 * K + k0;
-                const uint16_t *bp = tiled
-                        ? b + b_tile_off(n0, k0, K)
-                        : b + (size_t)n0 * K + k0;
+            const int nk = K / AME_TILE_K;      /* 整块数 */
 
-                /* A: mtilem×mtilek 左矩阵     B: mtilen×mtilek 右矩阵
-                 *
-                 * ★ 地址与 stride 必须钉死在 a0 / a1。
-                 *   用普通的 "r" 约束时编译器会自由分配，真机上实测到分到
-                 *   (a1, t5) 的组合会被判为**非法指令**（mcause=2），而同一条
-                 *   mlae16 用 (a0, a1) 就正常 —— 编码里除寄存器号外完全一致。
-                 *   L0 的 step5 与 L1 的用例都是手写、寄存器固定，所以它们全过，
-                 *   唯独这里让编译器分配，于是只有 L2 崩。
-                 *   在硬件确认寄存器编码的限制之前，这里保持与 L0/L1 一致。 */
-                { register const uint16_t *p __asm__("a0") = ap;
-                  register long st __asm__("a1") = a_stride;
-                  __asm__ volatile("mlae16 tr0,(%0),%1"
-                                   :: "r"(p), "r"(st) : "memory"); }
-                { register const uint16_t *p __asm__("a0") = bp;
-                  register long st __asm__("a1") = b_stride;
-                  __asm__ volatile("mlbe16 tr1,(%0),%1"
-                                   :: "r"(p), "r"(st) : "memory"); }
-                /* acc0 += A · Bᵀ   —— 操作数顺序 (md, B, A) */
-                __asm__ volatile("mfmacc.s.bf16 acc0,tr1,tr0");
+#ifndef AME_NO_PIPELINE
+            /* ═══════ k 维双缓冲 ═══════
+             *
+             * 串行写法是「载 A、载 B、算」，算的时候访存通道整个空着。
+             * 这里用两组 tile 寄存器交替：算 tr0/tr1 的同时把下一块
+             * 预取进 tr2/tr3，通道不再有空窗。
+             *
+             * 收益上限是「计算期间通道空闲的比例」—— 它不减少一个字节的
+             * 权重访存，只是把洞填上。burst 之前访存慢到计算完全被淹没，
+             * 这么写没有意义；burst 之后计算的占比浮上来才值得。
+             *
+             * 只在 K 能被 32 整除且至少两块时启用：否则最后一块的 mtilek
+             * 不同，而 mtilek 是 CSR、对当前所有 tile 寄存器全局生效，
+             * 预取下一块就会改掉当前块的形状。整除时 kk 恒为 32，
+             * set_tile 一次即可，连带省下每次迭代的三条 CSR 写。 */
+            if (nk >= 2 && K % AME_TILE_K == 0) {
+                AME_LOAD_A("tr0", AP(0), a_stride);
+                AME_LOAD_B("tr1", BP(0), b_stride);
+
+                for (int i = 0; i < nk; i += 2) {
+                    const int k1 = (i + 1) * AME_TILE_K;
+                    const int k2 = (i + 2) * AME_TILE_K;
+                    /* 偶数块在 tr0/tr1：先把奇数块预取进 tr2/tr3 再算 */
+                    if (i + 1 < nk) {
+                        AME_LOAD_A("tr2", AP(k1), a_stride);
+                        AME_LOAD_B("tr3", BP(k1), b_stride);
+                    }
+                    AME_MFMACC("acc0", "tr1", "tr0");
+
+                    if (i + 1 < nk) {
+                        if (i + 2 < nk) {
+                            AME_LOAD_A("tr0", AP(k2), a_stride);
+                            AME_LOAD_B("tr1", BP(k2), b_stride);
+                        }
+                        AME_MFMACC("acc0", "tr3", "tr2");
+                    }
+                }
+            } else
+#endif
+            {
+                /* 串行路径。K 不整除 32 时的正确性靠它兜底；
+                 * 真机上双缓冲若出问题，-DAME_NO_PIPELINE 一键退回这里。 */
+                for (int k0 = 0; k0 < K; k0 += AME_TILE_K) {
+                    const int kk = (K - k0 < AME_TILE_K) ? (K - k0) : AME_TILE_K;
+                    set_tile(mm, nn, kk);
+                    AME_LOAD_A("tr0", AP(k0), a_stride);
+                    AME_LOAD_B("tr1", BP(k0), b_stride);
+                    AME_MFMACC("acc0", "tr1", "tr0");
+                }
             }
+            #undef AP
+            #undef BP
 
             /* 写出 mtilem×mtilen 的 FP32 结果。K 维已累加完，此处 k 值无关。 */
             set_tile(mm, nn, AME_TILE_K);
             float *cp = c + (size_t)m0 * N + n0;
-            /* 同样钉死寄存器，理由见上面 mlae16 处。 */
-            { register float *p __asm__("a0") = cp;
-              register long st __asm__("a1") = c_stride;
-              __asm__ volatile("msce32 acc0,(%0),%1"
-                               :: "r"(p), "r"(st) : "memory"); }
+            AME_STORE_C("acc0", cp, c_stride);
         }
     }
 

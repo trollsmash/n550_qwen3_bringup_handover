@@ -115,6 +115,18 @@ fi
 CHAT_GEN_DEF=""
 [ -n "${CHAT_GEN:-}" ] && CHAT_GEN_DEF="-DCHAT_MAX_GEN=$CHAT_GEN"
 
+# 上下文窗口（KV cache 容量）。qwen3.h 默认 256，x86 与 QEMU user-mode
+# 沿用它；真机 demo 要多轮对话，用 MAX_SEQ=N 注入。
+#
+# 注意它按 N x 229 KB 线性吃 arena：512 -> 117 MB，而 arena 是 BSS 里的
+# 静态数组，夹在程序镜像与 mailbox(0x87F00000) 之间，上限约 127 MB。
+# 再往上要把 g_scratch 挪出 BSS，那会动到内存布局。
+#
+# 它**不影响** decode 速度：attention 只读到当前位置，MAX_SEQ 仅参与
+# 地址计算。变慢的是实际聊得更长，不是容量设得更大。
+MAXSEQ_DEF=""
+[ -n "${MAX_SEQ:-}" ] && MAXSEQ_DEF="-DQWEN3_MAX_SEQ=$MAX_SEQ"
+
 case "${1:-build}" in
 build) build ;;
 run)
@@ -141,7 +153,7 @@ baremetal)
     rm -f "$BM_ELF"
     # -Isrc 是为了让 start.S 能 #include "board.h"
     # shellcheck disable=SC2086
-    ${CROSS}gcc $RISCV_CFLAGS -Isrc $BOARD_DEF $WSIZE_DEF $CHAT_GEN_DEF -ffreestanding -nostdlib -nostartfiles \
+    ${CROSS}gcc $RISCV_CFLAGS -Isrc $BOARD_DEF $WSIZE_DEF $CHAT_GEN_DEF $MAXSEQ_DEF -ffreestanding -nostdlib -nostartfiles \
         -T src/bsp/qemu_virt.ld src/bsp/start.S \
         src/qwen3.c src/tokenizer.c src/kernels_${KERNEL}.c src/ops_${OPS}.c \
         src/main_baremetal.c $BSP \
@@ -152,8 +164,9 @@ baremetal)
     ln -sf "$(basename "$BM_ELF")"             "$OUT/qwen3_bm.elf"
     ln -sf "$(basename "${BM_ELF%.elf}.diss")" "$OUT/qwen3_bm.diss"
     ln -sf "$(basename "${BM_ELF%.elf}.sym")"  "$OUT/qwen3_bm.sym"
-    printf "   %s  (%.1f KB, 权重布局 %s, 回答上限 %s token)\n" "$BM_ELF" \
-        "$(echo "$(stat -c%s "$BM_ELF")/1024" | bc -l)" "$WTAG" "${CHAT_GEN:-1 默认}"
+    printf "   %s  (%.1f KB, 布局 %s, 回答上限 %s, 上下文 %s token)\n" "$BM_ELF" \
+        "$(echo "$(stat -c%s "$BM_ELF")/1024" | bc -l)" "$WTAG" \
+        "${CHAT_GEN:-1 默认}" "${MAX_SEQ:-256 默认}"
     printf "   %s  (反汇编，按 mepc 定位用)\n" "${BM_ELF%.elf}.diss"
 
     W="$OUT/w-$(basename "$WSRC" .bin).bin"

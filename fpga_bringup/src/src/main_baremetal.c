@@ -210,6 +210,27 @@ static const int g_prompt[] = { 108386, 37945, 109432, 107828 };
 #define CHAT_PREFIX "<|im_start|>user\n"
 #define CHAT_MIDDLE "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 
+/* 续轮时补上一轮 assistant 的结束标记。生成循环遇到 EOS 就 break 了，
+ * 那个 <|im_end|> 从没进过 KV cache，不补的话模型看到的是一段
+ * 没有收尾的 assistant 发言，接下来的 user 轮次会被理解成它的续写。 */
+#define CHAT_TURN_SEP "<|im_end|>\n"
+
+/* 一轮至少要留这么多生成位置，否则这轮没有意义，不如直接开新对话。 */
+#define CHAT_MIN_GEN 8
+
+/* ---------------- 多轮对话状态 ----------------
+ *
+ * KV cache 里躺着前几轮的 K/V，新一轮从 g_pos 往后写 —— 模型于是
+ * "记得"之前说过什么。这比每轮重新 prefill 整段历史更省：
+ * 省下的正好是一次完整的权重遍历。
+ *
+ * g_last_tok 的由来：生成循环里最后一个 token 只打印、不 forward
+ *   （再 forward 一次要多遍历 1.1 GB 权重，而它的 logits 没人用）。
+ * 于是它没进 KV cache。下一轮把它接在开头补回来，历史才是连续的 ——
+ * 比补一次前向便宜得多。 */
+static int g_pos      = 0;    /* KV cache 已占用的位置数 */
+static int g_last_tok = -1;   /* 上一轮最后一个 token，尚未进 KV cache */
+
 static uint32_t g_tok_htab[1u << 19];      /* merges 哈希表 */
 static char     g_chat_buf[1024];
 static int      g_chat_ids[QWEN3_TOK_MAX];
@@ -323,7 +344,20 @@ extern char _end[];
 static void check_layout(void) {
     unsigned long img_end = (unsigned long)_end;
     P("镜像 "); X(DRAM_BASE); P(" .. "); X(img_end);
-    P("  ("); U((img_end - DRAM_BASE) >> 20); P(" MiB)\n");
+    P("  ("); U((img_end - DRAM_BASE) >> 20); P(" MiB");
+    /* 余量随 QWEN3_MAX_SEQ 线性缩小（arena 按 N x 229 KB 吃 BSS），
+     * 印出来才好判断还能不能再调大上下文。 */
+    P("，距 mailbox 余 "); U((BOARD_MBOX_ADDR - img_end) >> 10); P(" KiB)\n");
+
+    /* ★ 下界是 mailbox 而不是权重区 —— 它比 WEIGHTS_ADDR 靠前 1 MB。
+     * 只查 WEIGHTS_ADDR 会漏掉 [MBOX, WEIGHTS) 这一段：镜像落在那里时
+     * BSS 清零把 mailbox 擦成 0，host 侧永远读到 0，看起来像程序没跑起来，
+     * 而串口那边一切正常 —— 这种错最难往内存布局上想。 */
+    if (img_end > BOARD_MBOX_ADDR) {
+        P("镜像末端越过 mailbox="); X(BOARD_MBOX_ADDR);
+        P("\n  → 调小 QWEN3_MAX_SEQ，或把 arena 移出 BSS\n");
+        die("内存布局冲突：BSS 清零会擦掉 mailbox");
+    }
     if (img_end > WEIGHTS_ADDR) {
         P("镜像末端越过 WEIGHTS_ADDR="); X(WEIGHTS_ADDR);
         P("\n  → 请调大 WEIGHTS_ADDR 并同步 build_riscv.sh 的 -device loader\n");
@@ -335,8 +369,9 @@ static void check_layout(void) {
  * 演示形态：一个串口终端，输入中文回车，答案逐字冒出来。
  * 不需要 host 侧程序，也不用 PCIe 后门参与 —— 现场只有一根串口线。
  *
- * 单轮对话：每次都从 pos0=0 重新 prefill，KV 缓存被新一轮覆盖。
- * 多轮上下文对 demo 不是必需，而每轮独立反倒让现场更可控。 */
+ * 多轮对话：KV cache 跨轮保留，新一轮从 g_pos 往后写，模型记得前文。
+ * 这比每轮重新 prefill 整段历史更省 —— 省下的正好是一次权重遍历。
+ * 上下文由 QWEN3_MAX_SEQ 封顶，满了自动重开，也可以输入 new 手动清空。 */
 
 /* 现场用输入法打中文有卡壳风险（终端编码、输入法切换），
  * 预置几条按数字键直接触发，手输作为加分项而非唯一路径。 */
@@ -349,15 +384,45 @@ static const char *g_presets[] = {
 
 static char g_line[512];
 
-static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
+/* 拼出这一轮要喂进去的 token。cont=1 表示接着上一轮说，
+ * 此时要补上一轮的收尾标记与那个没进 cache 的 token。
+ * 返回 token 数，负数是错误码。 */
+static int build_turn(qwen3_tok_t *tk, const char *prompt, int cont) {
     unsigned long n = 0;
+    if (cont) n = cat(g_chat_buf, n, CHAT_TURN_SEP);
     n = cat(g_chat_buf, n, CHAT_PREFIX);
     n = cat(g_chat_buf, n, prompt);
     n = cat(g_chat_buf, n, CHAT_MIDDLE);
 
-    int n_in = qwen3_tok_encode(tk, g_chat_buf, n, g_chat_ids, QWEN3_TOK_MAX);
+    int k = 0;
+    if (cont && g_last_tok >= 0) g_chat_ids[k++] = g_last_tok;
+    int e = qwen3_tok_encode(tk, g_chat_buf, n, g_chat_ids + k,
+                             QWEN3_TOK_MAX - k);
+    return (e < 0) ? e : (k + e);
+}
+
+static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
+    int cont = (g_pos > 0);
+    int n_in = build_turn(tk, prompt, cont);
     if (n_in < 0 || n_in > QWEN3_MAX_BATCH) {
         P("  [prompt 编码失败或超过单批上限，换短一点的问题]\n");
+        return;
+    }
+
+    /* 装不下就重开一轮。宁可丢掉历史，也不能让位置越过 MAX_SEQ ——
+     * 那会静默写进下一层的 KV 区域，输出变胡话却看不出是内存问题。 */
+    if (cont && g_pos + n_in + CHAT_MIN_GEN > QWEN3_MAX_SEQ) {
+        P("  [上下文已满 "); I(g_pos); P("/"); I(QWEN3_MAX_SEQ);
+        P("，自动开始新对话]\n");
+        g_pos = 0; g_last_tok = -1;
+        n_in = build_turn(tk, prompt, 0);
+        if (n_in < 0 || n_in > QWEN3_MAX_BATCH) {
+            P("  [prompt 编码失败或超过单批上限，换短一点的问题]\n");
+            return;
+        }
+    }
+    if (g_pos + n_in >= QWEN3_MAX_SEQ) {
+        P("  [prompt 装不进 KV cache，换短一点的问题]\n");
         return;
     }
 
@@ -370,16 +435,15 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
      * 不报错也不 trap，只是后面几层读到污染的 K/V，输出变成胡话。
      * 这种错查起来极贵（看着像模型算错，其实是内存），所以在这里挡住：
      * 让 CHAT_MAX_GEN 表达"想要多少"，剩余容量不够时自动收敛。 */
-    int budget = QWEN3_MAX_SEQ - n_in;
+    int budget = QWEN3_MAX_SEQ - g_pos - n_in;
     int limit  = CHAT_MAX_GEN < budget ? CHAT_MAX_GEN : budget;
     if (limit <= 0) {
-        P("  [prompt 已占满 KV cache（"); I(n_in);
-        P("/"); I(QWEN3_MAX_SEQ); P(" token），没有生成空间，换短一点的问题]\n");
+        P("  [KV cache 没有生成空间了，输入 new 清空上下文]\n");
         return;
     }
 
     uint64_t c0 = rd_mcycle();
-    qwen3_forward_batch(m, g_chat_ids, n_in, 0);   /* prefill：进度条照常 */
+    qwen3_forward_batch(m, g_chat_ids, n_in, g_pos);  /* prefill：进度条照常 */
     int next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
     /* 进度条到此为止。换行让答案从行首开始，读起来才是一段话。 */
     g_show_layer = 0;
@@ -395,6 +459,7 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
             *BOARD_PTR(uint32_t, BOARD_MBOX_TOKENS + 4u * (unsigned)got) =
                 (uint32_t)next;
         mbox_text_append(piece, plen);
+        g_last_tok = next;       /* 它不会被 forward，留给下一轮补 */
         got++;
         mbox_set(BOARD_MBOX_NTOKEN, (uint32_t)got);
         /* 最后一个 token 不必再前向：那一整遍 1.1 GB 权重算出的 logits
@@ -412,9 +477,13 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
             P("  [已中止]");
             break;
         }
-        qwen3_forward(m, next, n_in + i);
+        qwen3_forward(m, next, g_pos + n_in + i);
         next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
     }
+    /* 推进位置：prefill 占了 n_in 个；生成循环里只有前 got-1 个被 forward
+     * 进 KV cache，最后一个留在 g_last_tok 里等下一轮补。 */
+    g_pos += n_in + (got > 0 ? got - 1 : 0);
+
     g_show_layer = 1;          /* 恢复，别影响下一轮 prefill 与其他路径 */
     uint64_t c1 = rd_mcycle();
     mbox_set(BOARD_MBOX_CYCLES_LO, (uint32_t)(c1 - c0));
@@ -469,14 +538,23 @@ static void chat_repl(qwen3_t *m, qwen3_tok_t *tk) {
     P("\n============ 交互模式 ============\n");
     P("直接输入中文问题后回车；输入数字选预置问题；q 退出\n");
     P("生成过程中按任意键可中止\n");
+    P("多轮对话：上一轮的内容会被记住；输入 new 清空重来\n");
     for (int i = 0; i < N_PRESET; i++) {
         P("  "); I(i + 1); P(") "); P(g_presets[i]); P("\n");
     }
     for (;;) {
-        P("\n> ");
+        /* 提示符里带上 KV cache 占用：多轮对话下"还能聊几句"是个
+         * 随时在变的量，等它满了才发现就晚了。 */
+        if (g_pos > 0) { P("\n["); I(g_pos); P("/"); I(QWEN3_MAX_SEQ); P("] > "); }
+        else            { P("\n> "); }
         int len = uart_readline(g_line, (int)sizeof g_line);
         if (len == 0) continue;
         if (len == 1 && (g_line[0] == 'q' || g_line[0] == 'Q')) break;
+        if (len == 3 && g_line[0] == 'n' && g_line[1] == 'e' && g_line[2] == 'w') {
+            g_pos = 0; g_last_tok = -1;
+            P("  [上下文已清空]\n");
+            continue;
+        }
 
         const char *prompt = g_line;
         if (len == 1 && g_line[0] >= '1' && g_line[0] < '1' + N_PRESET) {

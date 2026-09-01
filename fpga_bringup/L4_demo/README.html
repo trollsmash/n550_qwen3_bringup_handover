@@ -86,10 +86,21 @@ td code, th code { white-space:nowrap; }
 <p>每次回答最多 <strong>128 个 token</strong>（中文约 4.7 字节/token，合 192 个汉字左右）， 模型吐出 EOS 会提前停，短问题不会硬凑满。</p>
 <p>这个上限在编译时注入。<code>L2_L3_fullmodel/</code> 的固件用的是源码默认值 <strong>1</strong> —— 那是给 QEMU 定的（那里每多一个 token 就要再遍历一遍 1.1 GB 权重）， <strong>问一句只答一两个字</strong>。要看完整回答，用本目录这一份。</p>
 <p>生成过程中按任意键可中止，不必等满。</p>
+<h2>多轮对话</h2>
+<p><strong>上一轮的内容会被记住</strong>，可以接着追问：</p>
+<pre><code>&gt; 中国最大的淡水湖在哪里
+中国最大的淡水湖是鄱阳湖……
+
+[67/512] &gt; 第二大呢
+（这一轮能看到上一轮的问答）</code></pre>
+<p>提示符里的 <code>[已用/512]</code> 是 KV cache 占用。上下文窗口 <strong>512 token</strong>，按每轮约 70 token 估算能撑七八轮； 满了会自动开始新对话并明确提示，也可以随时输入 <code>new</code> 手动清空。</p>
+<p>实现上是 KV cache 跨轮保留、新一轮从已用位置往后写， <strong>比每轮重新 prefill 整段历史更省</strong> —— 省下的正好是一次完整的权重遍历。</p>
 <h2>关于性能：现在不会更快</h2>
 <p>tile-major 把 GEMM 的行间跨度从 <code>K×2</code>（2048 或 6144 字节）压成 64 字节， 整个 tile 连续 8 KB 且 4 KB 对齐 —— 8 KB 恰好切成两个 ARLEN=63 的 burst， 不跨 4 KB 边界。</p>
 <p><strong>但这套收益要 RTL 支持「stride 等于数据位宽时合并 burst」才能兑现。</strong> 在那之前，L4 与 L3 的 token/s 应当基本一致；若明显更慢，那是 bug，请反馈。</p>
 <p>现在就把它放上板，是为了确认这个布局在真机上数值正确 —— RTL 改完之后直接换目录就能见效，不用再等一轮软件。</p>
+<p>本版另外做了 <strong>k 维双缓冲</strong>：用两组 tile 寄存器交替，算 <code>tr0/tr1</code> 的 同时把下一块预取进 <code>tr2/tr3</code>，让访存通道在计算期间不空转。 它不减少一个字节的权重访存，收益上限就是&quot;计算期间通道空闲的比例&quot; —— burst 之前访存慢到计算完全被淹没，这么写没意义；burst 之后才值得。 数值已在 QEMU 上验过与串行路径逐 token 一致。</p>
+<p>若真机上出现 <code>mcause=2</code>（非法指令），先怀疑这里： 本版同时解开了&quot;地址与 stride 钉死 a0/a1&quot;的旧约束， 编译器现在会用到 <code>t1</code> 等寄存器。反馈给软件侧即可退回。</p>
 <h2>判据</h2>
 <p>与 L3 相同：能在 <code>&gt;</code> 提示符下输入中文、得到中文回答即通过。 逐 token 的数值自检在 L2 做（不加载 <code>tok.bin</code> 即进回归模式）。</p>
 <p class="meta">由 tools/42_md2html.py 从 README.md 生成。
