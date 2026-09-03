@@ -192,6 +192,76 @@ static uint64_t rd_mcycle(void) {
     return v;
 }
 
+/* ==================== 开机标识与时钟 ==================== */
+
+static void D2(unsigned v) {          /* 两位、补零 —— 时间字段全靠它对齐 */
+    putc_((char)(0x30 + (v / 10) % 10));
+    putc_((char)(0x30 + v % 10));
+}
+
+/* 开机第一屏。logo 是 Unicode 立体块字符，串口通道本来就跑 UTF-8
+ * （中文回答一直是这么出的），所以能显示。 */
+static void print_banner(void) {
+    P("\n");
+    P("  \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2557    \u2588\u2588\u2557\u2588\u2588\u2557\u2588\u2588\u2588\u2557   \u2588\u2588\u2557\n");
+    P("  \u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d\u2588\u2588\u2551    \u2588\u2588\u2551\u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2551\n");
+    P("  \u2588\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2551 \u2588\u2557 \u2588\u2588\u2551\u2588\u2588\u2551\u2588\u2588\u2554\u2588\u2588\u2557 \u2588\u2588\u2551\n");
+    P("  \u2588\u2588\u2554\u2550\u2550\u255d  \u255a\u2550\u2550\u2550\u2550\u2588\u2588\u2551\u2588\u2588\u2551\u2588\u2588\u2588\u2557\u2588\u2588\u2551\u2588\u2588\u2551\u2588\u2588\u2551\u255a\u2588\u2588\u2557\u2588\u2588\u2551\n");
+    P("  \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2551\u255a\u2588\u2588\u2588\u2554\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2551\u2588\u2588\u2551 \u255a\u2588\u2588\u2588\u2588\u2551\n");
+    P("  \u255a\u2550\u2550\u2550\u2550\u2550\u2550\u255d\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u255d \u255a\u2550\u2550\u255d\u255a\u2550\u2550\u255d \u255a\u2550\u255d\u255a\u2550\u255d  \u255a\u2550\u2550\u2550\u255d\n");
+    P("   C  O  M  P  U  T  I  N  G\n\n");
+    P("  ==================================================================\n");
+    P("   Hardware    AI Core N550            developed by Zhufeng Institute\n");
+    P("   Software    Qwen3-0.6B LLM port     developed by Zhufeng Institute\n");
+    P("   Toolchain   RISC-V GCC + AME        developed by Zhufeng Institute\n");
+    P("  ==================================================================\n");
+    P("   Copyright (c) 2026 Beijing ESWIN Computing Technology Co., Ltd.\n");
+    P("   All rights reserved.\n");
+    P("  ==================================================================\n");
+}
+
+/* 板上没有 RTC：mcycle 只知道开机多久，不知道今天几号。
+ * host 下载镜像时往 BOARD_MBOX_EPOCH 写一个 UTC 秒数，这里加上开机时长
+ * 再加 8 小时即北京时间。**没授时也能跑** —— 读到 0 就显示开机时长；
+ * 屏幕上跳出 1970 年，比老实说"开机 12 分钟"难看得多。 */
+static void print_clock(void) {
+    uint32_t base = *BOARD_PTR(volatile uint32_t, BOARD_MBOX_EPOCH);
+#if BOARD_CPU_HZ
+    uint64_t up_s = rd_mcycle() / (uint64_t)BOARD_CPU_HZ;
+#else
+    uint64_t up_s = 0;                /* QEMU 下 mcycle 不对应真实时间 */
+#endif
+
+    if (base == 0) {                  /* host 没授时 */
+        P("[\u5f00\u673a ");
+        D2((unsigned)(up_s / 3600));      putc_(0x3a);
+        D2((unsigned)(up_s / 60 % 60));   putc_(0x3a);
+        D2((unsigned)(up_s % 60));        P("]");
+        return;
+    }
+
+    uint64_t t    = (uint64_t)base + up_s + 8u * 3600u;   /* -> 北京时间 */
+    uint32_t days = (uint32_t)(t / 86400u);
+    uint32_t sod  = (uint32_t)(t % 86400u);
+
+    /* civil_from_days：1970 起的天数还原成年月日。以 3 月为岁首、
+     * 400 年一循环，于是闰年只在最后一步修正一次，不必查表。 */
+    uint32_t z   = days + 719468u;
+    uint32_t era = z / 146097u, doe = z % 146097u;
+    uint32_t yoe = (doe - doe/1460u + doe/36524u - doe/146096u) / 365u;
+    uint32_t y   = yoe + era * 400u;
+    uint32_t doy = doe - (365u*yoe + yoe/4u - yoe/100u);
+    uint32_t mp  = (5u*doy + 2u) / 153u;
+    uint32_t d   = doy - (153u*mp + 2u)/5u + 1u;
+    uint32_t mo  = mp + (mp < 10u ? 3u : (uint32_t)-9);
+    y += (mo <= 2u);
+
+    P("[");  U((unsigned long)y); putc_(0x2d); D2(mo); putc_(0x2d); D2(d);
+    putc_(0x20);
+    D2(sod / 3600u); putc_(0x3a); D2(sod / 60u % 60u); putc_(0x3a);
+    D2(sod % 60u);  P("]");
+}
+
 /* ==================== 模型 ==================== */
 /* arena 指向 DDR 里的固定地址，不再占 BSS。容量由 board.h 给出，
  * qwen3_init 会用 QWEN3_SCRATCH_BYTES 校验够不够。
@@ -402,11 +472,13 @@ static void check_layout(void) {
      * 所以在启动第一秒就挡住：往 RVV 视图写、从 AME 视图读回核对。 */
     {
         int rc = board_clp_selftest();
-        P("CLP 窗口 "); X(BOARD_CLP_RVV_BASE); P(" -> ");
-        X(BOARD_CLP_DDR_BASE); P("  ");
+        /* 失败分支自己会把窗口地址打全，这里不再预告。 */
         if (rc == 0) {
-            P("自检 OK（RVV/AME 双向可见）\n");
+            /* 成功时不出声：这行对操作者没有信息量，只占演示画面。
+             * 失败才需要人看见 —— 见下面的分支。 */
         } else {
+            P("CLP 窗口 "); X(BOARD_CLP_RVV_BASE); P(" -> ");
+            X(BOARD_CLP_DDR_BASE); P("\n");
             P("自检失败 rc="); U((unsigned long)rc); P("\n");
             P("  rc=1: RVV 写入后 AME 视图读不到；rc=2: 反向读不到\n");
             P("  → 检查 NoC 是否已把该窗口重映射到 DDR\n");
@@ -609,8 +681,9 @@ static void chat_repl(qwen3_t *m, qwen3_tok_t *tk) {
     for (;;) {
         /* 提示符里带上 KV cache 占用：多轮对话下"还能聊几句"是个
          * 随时在变的量，等它满了才发现就晚了。 */
-        if (g_pos > 0) { P("\n["); I(g_pos); P("/"); I(QWEN3_MAX_SEQ); P("] > "); }
-        else            { P("\n> "); }
+        P("\n"); print_clock(); P(" \u73e0\u5cf0\u5c0f\u52a9\u624b ");
+        if (g_pos > 0) { P("["); I(g_pos); P("/"); I(QWEN3_MAX_SEQ); P("] "); }
+        P("> ");
         int len = uart_readline(g_line, (int)sizeof g_line);
         if (len == 0) continue;
         if (len == 1 && (g_line[0] == 'q' || g_line[0] == 'Q')) break;
@@ -635,6 +708,7 @@ static void chat_repl(qwen3_t *m, qwen3_tok_t *tk) {
 
 void qwen3_main(void) {
     uart_init();                /* 必须早于第一次 putc_ */
+    print_banner();
     P("\n=== Qwen3-0.6B on RISC-V (bare-metal) ===\n");
     P("build "); X(BOARD_BUILD_ID); P("   (0xMMDDhhmm)\n");
     P("kernel="); P(qwen3_kernel_name());

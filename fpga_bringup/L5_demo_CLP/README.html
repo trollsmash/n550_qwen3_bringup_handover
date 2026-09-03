@@ -75,6 +75,7 @@ td code, th code { white-space:nowrap; }
 <h2>文件与地址</h2>
 <div class='tablewrap'><table><thead><tr><th>文件</th><th>写入地址</th></tr></thead><tbody><tr><td><code>qwen3_s2c.bin</code></td><td>0x80000000</td></tr><tr><td><code>w.bin</code></td><td>0x88000000（tile-major，与 L4 同一份）</td></tr><tr><td><code>tok.bin</code></td><td>0xD0000000（与 L4 同一份）</td></tr></tbody></table></div>
 <p><strong><code>w.bin</code> 和 <code>tok.bin</code> 与 L4 完全相同</strong>，只需换 <code>qwen3_s2c.bin</code> 即可在两版之间切换。</p>
+<p>放开复位前，往 0x87F00014 写一个 uint32 = 当前 UTC 秒 （<code>date +%s</code>），提示符就会显示北京时间。板上没有 RTC，不授时则退回 显示开机时长，不影响运行。</p>
 <h2>⚠ 上板前必须先配好 NoC 重映射</h2>
 <p>程序假定：</p>
 <pre><code>RVV 访问 0x1000_0000 .. 0x1FFF_FFFF

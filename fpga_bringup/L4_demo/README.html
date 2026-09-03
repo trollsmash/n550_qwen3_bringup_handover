@@ -76,7 +76,8 @@ td code, th code { white-space:nowrap; }
 <div class='tablewrap'><table><thead><tr><th>文件</th><th>写入地址</th><th>说明</th></tr></thead><tbody><tr><td><code>qwen3_s2c.bin</code></td><td>0x80000000</td><td>固件（按 tile 权重的大小编译）</td></tr><tr><td><code>w.bin</code></td><td>0x88000000</td><td>权重，<strong>tile-major 布局</strong></td></tr><tr><td><code>tok.bin</code></td><td>0xD0000000</td><td>分词器</td></tr></tbody></table></div>
 <p><code>qwen3_s2c.elf</code> / <code>.diss</code> / <code>.sym</code> 是调试用，不写进板子。 真出了 TRAP，用 <code>riscv-unknown-elf-addr2line -e qwen3_s2c.elf &lt;mepc&gt;</code> 定位。</p>
 <h2>上板</h2>
-<ol><li>三块经 PCIe 后门写进 DDR（地址见上表，或 <code>addresses.txt</code>）</li><li>放开复位</li><li>串口 0x20100000，115200 8N1，终端编码设 UTF-8</li><li>等 <code>&gt;</code> 提示符 —— 出现即表示权重校验与分词器加载都过了</li></ol>
+<ol><li>三块经 PCIe 后门写进 DDR（地址见上表，或 <code>addresses.txt</code>）</li><li><strong>授时</strong>（可选）：往 0x87F00014 写一个 uint32 = 当前 UTC 秒（<code>date +%s</code>）。提示符会显示北京时间；不写则显示开机时长。 板上没有 RTC，时间只能由 host 给。</li><li>放开复位</li><li>串口 0x20100000，115200 8N1，终端编码设 UTF-8</li><li>等提示符 <code>[…] 珠峰小助手 &gt;</code> —— 出现即表示权重校验与分词器加载都过了</li></ol>
+<p>开机第一屏是 ESWIN Computing 标识，用 Unicode 制表符绘制， <strong>终端编码必须是 UTF-8</strong>，否则这一屏会是乱码（中文回答同理）。</p>
 <p>权重 1.11 GB 写入耗时较长，期间没有串口输出属正常。 host 侧也可以轮询 mailbox 0x87F00000，读到 <code>0xB0000002</code> 即就绪，不必靠猜。</p>
 <h2>⚠ 不要和 L2_L3_fullmodel/ 混用</h2>
 <p>固件把权重总长编进了二进制，<code>qwen3_init</code> 会严格核对：</p>

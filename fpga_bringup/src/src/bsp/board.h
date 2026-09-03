@@ -233,6 +233,12 @@
 #define BOARD_MBOX_NTOKEN     (BOARD_MBOX_ADDR + 0x08)  /* 已生成 token 数 */
 #define BOARD_MBOX_CYCLES_LO  (BOARD_MBOX_ADDR + 0x0C)  /* mcycle 低 32 位 */
 #define BOARD_MBOX_CYCLES_HI  (BOARD_MBOX_ADDR + 0x10)
+/* 开机授时：板上没有 RTC，mcycle 只知道开机多久、不知道今天几号。
+ * 下载镜像时由 host 往这里写一个 UTC epoch（秒，uint32），固件加 8 小时
+ * 得到北京时间。**没写也能跑** —— 读到 0 就退回显示开机时长，
+ * 免得忘了授时的时候屏幕上跳出 1970 年。 */
+#define BOARD_MBOX_EPOCH      (BOARD_MBOX_ADDR + 0x14)  /* host 写入的 UTC 秒 */
+
 #define BOARD_MBOX_TOKENS     (BOARD_MBOX_ADDR + 0x20)  /* 生成的 token id 数组 */
 /* trap 现场：mcause / mepc / mtval / mstatus / ra / sp，各一个 32 位字。
  * 由 start.S 的 trap handler 在打串口**之前**写入 —— 串口是最不可靠的一环，
