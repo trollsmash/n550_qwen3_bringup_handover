@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>L5 —— CLP（RVV 高速接口）版</title>
+<style>
+:root {
+  --bg:#ffffff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0;
+  --code-bg:#f6f8fa; --code-fg:#1f2328; --accent:#0969da;
+  --quote-bar:#d1d9e0; --th-bg:#f6f8fa; --mark:#fff8c5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#3d444d;
+    --code-bg:#161b22; --code-fg:#e6edf3; --accent:#4493f8;
+    --quote-bar:#3d444d; --th-bg:#161b22; --mark:#3f2e00;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; padding:2.5rem 1.25rem 6rem; background:var(--bg); color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",
+              "PingFang SC","Hiragino Sans GB",sans-serif;
+  font-size:16px; line-height:1.7;
+  -webkit-text-size-adjust:100%;
+}
+main { max-width:900px; margin:0 auto; }
+h1,h2,h3 { line-height:1.3; margin:2.2em 0 .8em; font-weight:600; }
+h1 { font-size:1.9rem; margin-top:0; padding-bottom:.35em; border-bottom:1px solid var(--line); }
+h2 { font-size:1.4rem; padding-bottom:.3em; border-bottom:1px solid var(--line); }
+h3 { font-size:1.15rem; }
+p { margin:.9em 0; }
+a { color:var(--accent); text-decoration:none; }
+a:hover { text-decoration:underline; }
+hr { border:0; border-top:1px solid var(--line); margin:2.5em 0; }
+strong { font-weight:650; }
+code {
+  background:var(--code-bg); color:var(--code-fg); border-radius:5px;
+  padding:.15em .38em; font-size:.88em;
+  font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+pre {
+  background:var(--code-bg); border:1px solid var(--line); border-radius:8px;
+  padding:.9rem 1rem; overflow-x:auto; margin:1.1em 0; line-height:1.55;
+}
+pre code { background:none; padding:0; font-size:.85rem; }
+blockquote {
+  margin:1.2em 0; padding:.15em 1.1em; color:var(--muted);
+  border-left:4px solid var(--quote-bar);
+}
+blockquote p { margin:.6em 0; }
+ul,ol { margin:.9em 0; padding-left:1.6em; }
+li { margin:.4em 0; }
+li > p { margin:.35em 0; }
+/* 宽表格自己横向滚动，页面本身绝不横向滚动 */
+.tablewrap { overflow-x:auto; margin:1.3em 0; }
+table { border-collapse:collapse; width:100%; font-size:.93rem; }
+th,td { border:1px solid var(--line); padding:.5em .75em; text-align:left; vertical-align:top; }
+th { background:var(--th-bg); font-weight:650; white-space:nowrap; }
+td code, th code { white-space:nowrap; }
+.meta { color:var(--muted); font-size:.85rem; margin-top:3rem;
+        padding-top:1rem; border-top:1px solid var(--line); }
+@media print {
+  body { padding:0; font-size:11pt; }
+  pre,.tablewrap { break-inside:avoid; }
+  h1,h2,h3 { break-after:avoid; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>L5 —— CLP（RVV 高速接口）版</h1>
+<p>与 <a href="../L4_demo/"><code>L4_demo/</code></a> <strong>只差一项</strong>：激活与 KV cache 改走 RVV 的 1024-bit 高速通路。其余全部相同（tile-major 权重、回答上限 256、 上下文 1024），<strong>就是为了做 A/B 对比</strong>。</p>
+<h2>文件与地址</h2>
+<div class='tablewrap'><table><thead><tr><th>文件</th><th>写入地址</th></tr></thead><tbody><tr><td><code>qwen3_s2c.bin</code></td><td>0x80000000</td></tr><tr><td><code>w.bin</code></td><td>0x88000000（tile-major，与 L4 同一份）</td></tr><tr><td><code>tok.bin</code></td><td>0xD0000000（与 L4 同一份）</td></tr></tbody></table></div>
+<p><strong><code>w.bin</code> 和 <code>tok.bin</code> 与 L4 完全相同</strong>，只需换 <code>qwen3_s2c.bin</code> 即可在两版之间切换。</p>
+<h2>⚠ 上板前必须先配好 NoC 重映射</h2>
+<p>程序假定：</p>
+<pre><code>RVV 访问 0x1000_0000 .. 0x1FFF_FFFF
+   ↓ NoC 重映射（同一物理内存）
+DDR      0xF000_0000 .. 0xFFFF_FFFF</code></pre>
+<p>RVV 走这个窗口<strong>绕过 L1 D-cache</strong>；AME 则直接用 <code>0xF000_0000</code> 段 （它本来就绕 L1D）。两条路径看到同一份数据，因此 GEMM 前后的 缓存维护指令被全部删除。</p>
+<p><strong>没配重映射就跑，启动时会被自检拦住</strong>并打印：</p>
+<pre><code>CLP 窗口 0x10000000 -&gt; 0xF0000000  自检失败 rc=1
+  rc=1: RVV 写入后 AME 视图读不到；rc=2: 反向读不到</code></pre>
+<p>自检是往 RVV 视图写魔数、从 AME 视图读回核对。<strong>没有这道检查的话， 映射配错的症状是&quot;数值莫名不对&quot;而不是崩溃</strong>，极难排查。</p>
+<h2>与 L4 的差异</h2>
+<div class='tablewrap'><table><thead><tr><th></th><th>L4</th><th>L5 (CLP)</th></tr></thead><tbody><tr><td>激活 / KV cache 位置</td><td><code>0xD100_0000</code>，RVV 经 L1D</td><td><code>0x1000_0000</code> 窗口，RVV 绕 L1D</td></tr><tr><td>GEMM 前后缓存维护</td><td>每次 5 次全量 <code>l1d_*_all</code></td><td><strong>无</strong></td></tr><tr><td><code>g_abuf</code> 的 BF16 转换</td><td>标量循环</td><td><strong>RVV <code>vfncvtbf16</code></strong></td></tr></tbody></table></div>
+<p>第三项是被迫的：<strong>标量访存绕不开 L1 D-cache</strong>，若转换仍用标量， 数据会停在 cache 里，AME 从 DDR 视图读到旧值且不会有任何报错。</p>
+<h2>该看什么</h2>
+<p>每 token 省下的缓存维护约 <strong>25 ms</strong>（原来每 token 要做 980 次全量操作）。 更大的变量是高速接口的实际带宽 —— 它 1024-bit/事务、<strong>不发 burst</strong>、 outstanding 8，吞吐 = 128 B × 8 ÷ 延迟，全靠 outstanding 撑。</p>
+<p><strong>对比方法</strong>：同一个问题在 L4 和 L5 各跑一次，比 <code>ms/token</code>。 上下文越长差距应当越明显（KV 读取占比随之上升）。</p>
+<h2>已知的未尽事项</h2>
+<p>KV cache 的布局仍是 <code>[layer][pos][kv_dim]</code>，attention 读某个 KV head 时 每次只取 512 字节、且相邻位置跳 4096 字节 —— <strong>只用掉 4/8 的 outstanding</strong>。 改成 <code>[layer][kvh][pos][head_dim]</code> 可让读取连续、填满 8 个，理论再快一倍。 这一项已列为 TODO，待本版实测带宽后再评估。</p>
+<p class="meta">由 tools/42_md2html.py 从 README.md 生成。
+内容以 Markdown 源文件为准；改了源文件请重新生成本页。</p>
+</main>
+</body>
+</html>

@@ -194,8 +194,17 @@ static uint64_t rd_mcycle(void) {
 
 /* ==================== 模型 ==================== */
 /* arena 指向 DDR 里的固定地址，不再占 BSS。容量由 board.h 给出，
- * qwen3_init 会用 QWEN3_SCRATCH_BYTES 校验够不够。 */
+ * qwen3_init 会用 QWEN3_SCRATCH_BYTES 校验够不够。
+ *
+ * CLP 下改指向 RVV 高速窗口：RVV/标量看到的是 0x1xxx 视图，AME 侧由
+ * kernels_ame.c 换算成 0xFxxx —— 同一物理内存，两条路都绕 L1D。 */
+#ifdef BOARD_CLP
+static uint8_t *const g_scratch = BOARD_PTR(uint8_t, BOARD_CLP_ARENA_ADDR);
+#define ARENA_LIMIT_BYTES  BOARD_CLP_ARENA_BYTES
+#else
 static uint8_t *const g_scratch = BOARD_PTR(uint8_t, BOARD_ARENA_ADDR);
+#define ARENA_LIMIT_BYTES  BOARD_ARENA_BYTES
+#endif
 
 /* golden_meta.json 里 raw 模式的 prompt token（"你好，请介绍一下你自己"）。
  * 回归模式用它，因为有黄金数据可比对。 */
@@ -379,8 +388,32 @@ static void check_layout(void) {
         die("内存布局冲突：BSS 清零会擦掉权重");
     }
 
-    /* arena 现在独立于镜像，单独校验：既要装得下，也不能越过 DRAM 顶。
-     * 它紧跟在分词器之后，所以下界还得躲开 tok.bin。 */
+    /* arena 现在独立于镜像，单独校验：既要装得下，也不能越过 DRAM 顶。 */
+#ifdef BOARD_CLP
+    P("arena "); X(BOARD_CLP_ARENA_ADDR); P(" .. ");
+    X(BOARD_CLP_ARENA_ADDR + QWEN3_SCRATCH_BYTES);
+    P("  ("); U(QWEN3_SCRATCH_BYTES >> 20); P(" MiB / 窗口余 ");
+    U(BOARD_CLP_ARENA_BYTES >> 20); P(" MiB)   [CLP: RVV 视图]\n");
+    if (QWEN3_SCRATCH_BYTES > BOARD_CLP_ARENA_BYTES) {
+        P("arena 需求超出 RVV 窗口\n");
+        die("内存布局冲突：CLP 窗口容量不足");
+    }
+    /* 重映射自检。配错时的症状是"数值莫名不对"而非崩溃 —— 那种错极难查，
+     * 所以在启动第一秒就挡住：往 RVV 视图写、从 AME 视图读回核对。 */
+    {
+        int rc = board_clp_selftest();
+        P("CLP 窗口 "); X(BOARD_CLP_RVV_BASE); P(" -> ");
+        X(BOARD_CLP_DDR_BASE); P("  ");
+        if (rc == 0) {
+            P("自检 OK（RVV/AME 双向可见）\n");
+        } else {
+            P("自检失败 rc="); U((unsigned long)rc); P("\n");
+            P("  rc=1: RVV 写入后 AME 视图读不到；rc=2: 反向读不到\n");
+            P("  → 检查 NoC 是否已把该窗口重映射到 DDR\n");
+            die("CLP 窗口重映射未生效");
+        }
+    }
+#else
     P("arena "); X(BOARD_ARENA_ADDR); P(" .. ");
     X(BOARD_ARENA_ADDR + QWEN3_SCRATCH_BYTES);
     P("  ("); U(QWEN3_SCRATCH_BYTES >> 20); P(" MiB / 上限 ");
@@ -393,6 +426,7 @@ static void check_layout(void) {
         P("arena 起点在分词器之前\n");
         die("内存布局冲突：arena 会覆盖 tok.bin");
     }
+#endif
 }
 
 /* ==================== 交互式对话 ====================
@@ -616,7 +650,7 @@ void qwen3_main(void) {
     P("权重 magic OK @ WEIGHTS_ADDR\n");
 
     static qwen3_t m;
-    int rc = qwen3_init(&m, blob, WEIGHTS_SIZE, g_scratch, BOARD_ARENA_BYTES);
+    int rc = qwen3_init(&m, blob, WEIGHTS_SIZE, g_scratch, ARENA_LIMIT_BYTES);
     if (rc != QWEN3_OK) { P(qwen3_strerror(rc)); die("qwen3_init 失败"); }
 
     P("arena "); U(m.arena.used >> 20); P(" MiB   层数 "); U((unsigned long)m.n_layers);

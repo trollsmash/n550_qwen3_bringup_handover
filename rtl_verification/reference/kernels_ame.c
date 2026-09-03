@@ -43,7 +43,19 @@
  * 当前 forward 逐 token（M=1）只用到 K 个元素，但按 prefill 批量化的上界
  * 预留 —— 否则 M>1 时会静默返回，表现为输出"未写入"。 */
 #define AME_A_MAX ((size_t)QWEN3_MAX_SEQ * QWEN3_INTERMEDIATE_SIZE)
+
+#ifdef BOARD_CLP
+#include <riscv_vector.h>
+/* CLP：g_abuf 落在 RVV 高速窗口里。RVV 用 0x1xxx 视图写、AME 用 0xFxxx
+ * 视图读 —— 同一物理内存、两条路都绕 L1D，因此不需要任何缓存同步。 */
+static uint16_t *const g_abuf = (uint16_t *)BOARD_CLP_ABUF_ADDR;
+/* 窗口内的指针喂给 AME 前必须换算：窗口只有 RVV 能访问。
+ * ★ 权重 b 在 0x88000000，**不在窗口内，不要套这个宏**。 */
+#define AME_ADDR(p)  BOARD_CLP_AME_VIEW(p)
+#else
 static uint16_t g_abuf[AME_A_MAX] __attribute__((aligned(64)));
+#define AME_ADDR(p)  ((const void *)(p))
+#endif
 
 /* ═══════ AME 指令封装 ═══════
  *
@@ -205,7 +217,21 @@ static void gemm_impl(int tiled, float *c, const float *a, const uint16_t *b,
     /* 激活 FP32 -> BF16。AME 的两个源操作数都必须是 BF16。 */
     const size_t n_a = (size_t)M * (size_t)K;
     if (n_a > AME_A_MAX) return;            /* 调用方违约；上界见 AME_A_MAX 注释 */
+#ifdef BOARD_CLP
+    /* ★ 必须用 RVV 写。标量访存绕不开 L1 D-cache —— 若这里仍是标量循环，
+     * 数据会停在 cache 里，AME 从 DDR 视图读到的是旧值，且不会有任何报错。
+     * vfncvtbf16 来自 zvfbfmin，与原来的位操作实现逐位一致。
+     * LMUL=8 一次 1024 B，正好填满高速接口的 8 个 outstanding。 */
+    for (size_t i = 0, vl; i < n_a; i += vl) {
+        vl = __riscv_vsetvl_e32m8(n_a - i);
+        __riscv_vse16_v_bf16m4(
+            (__bf16 *)(g_abuf + i),
+            __riscv_vfncvtbf16_f_f_w_bf16m4(__riscv_vle32_v_f32m8(a + i, vl), vl),
+            vl);
+    }
+#else
     for (size_t i = 0; i < n_a; i++) g_abuf[i] = f32_to_bf16(a[i]);
+#endif
 
     /* ═══════ AME 进入前的缓存同步 ═══════
      *
@@ -222,9 +248,17 @@ static void gemm_impl(int tiled, float *c, const float *a, const uint16_t *b,
      *      用 flush（写回+失效）而非 inval：此刻 AME 还没写，写回无害，
      *      且首尾不完整的 cache line 不会误伤相邻数据。
      * 权重 b 不用管：只读，CPU 从未写过，DDR 里本来就是对的。 */
+#ifdef BOARD_CLP
+    /* CLP 下无需缓存维护：g_abuf 与 c 都在 RVV 窗口内，RVV 与 AME 看到的
+     * 是同一份物理内存，两条路径都不经过 L1D。原本每次 GEMM 要做 5 次
+     * 全量 l1d_*_all，每 token 980 次、约 25 ms —— 全部省掉。
+     * fence 仍需保留：它约束的是程序序，与缓存无关。 */
+    BOARD_FENCE();
+#else
     BOARD_DCACHE_CLEAN(g_abuf, n_a * sizeof g_abuf[0]);
     BOARD_DCACHE_FLUSH(c, (size_t)M * (size_t)N * sizeof *c);
     BOARD_FENCE();
+#endif
 
     const long a_stride = (long)K * 2;      /* BF16 行字节 stride */
     /* 行优先要跨过整行 K 个元素才到 tile 的下一行（读 64 B 跳 2 KB）；
@@ -238,7 +272,9 @@ static void gemm_impl(int tiled, float *c, const float *a, const uint16_t *b,
 
         /* A 的地址只跟 k0 走，与 n0 无关 —— 三路并行正是拿这一点做文章。
          * B 的按布局取，n 参数化以便三路各取各的 tile。 */
-        #define AP(kk0)       (g_abuf + (size_t)m0 * K + (kk0))
+        /* CLP 下 A 在窗口内，喂给 AME 前换算成 DDR 视图。放在宏定义处，
+         * 三路与串行两条路径的全部加载点一次覆盖。 */
+        #define AP(kk0)       AME_ADDR(g_abuf + (size_t)m0 * K + (kk0))
         #define BPn(n_, kk0)  (tiled ? b + b_tile_off((n_), (kk0), K)      \
                                      : b + (size_t)(n_) * K + (kk0))
 
@@ -302,9 +338,9 @@ static void gemm_impl(int tiled, float *c, const float *a, const uint16_t *b,
                  * 任何行为，只白插三道屏障。 */
                 float *cp = c + (size_t)m0 * N + n0;
                 /* 三个 msce32 写到互不重叠的列区间，可以连续发出。 */
-                AME_STORE_C("acc0", cp,                      c_stride);
-                AME_STORE_C("acc1", cp +     AME_TILE_N,     c_stride);
-                AME_STORE_C("acc2", cp + 2 * AME_TILE_N,     c_stride);
+                AME_STORE_C("acc0", AME_ADDR(cp),                      c_stride);
+                AME_STORE_C("acc1", AME_ADDR(cp +     AME_TILE_N),     c_stride);
+                AME_STORE_C("acc2", AME_ADDR(cp + 2 * AME_TILE_N),     c_stride);
             }
         }
 #endif
@@ -379,7 +415,7 @@ static void gemm_impl(int tiled, float *c, const float *a, const uint16_t *b,
              * 串行 fallback 那条最后一次 set_tile 的 mtilek 可能是尾块的
              * kk，但 msce32 只看 mtilem/mtilen，与 k 无关。 */
             float *cp = c + (size_t)m0 * N + n0;
-            AME_STORE_C("acc0", cp, c_stride);
+            AME_STORE_C("acc0", AME_ADDR(cp), c_stride);
         }
         #undef AP
         #undef BPn
@@ -397,9 +433,13 @@ static void gemm_impl(int tiled, float *c, const float *a, const uint16_t *b,
      * AME 计算期间 CPU 没有写过它，所以此刻 c 在 L1D 里只可能有
      * 预取/推测带进来的**干净**拷贝，丢弃不会损失任何数据。
      * 反过来若这里用 flush，就会把旧值写回、覆盖 AME 的结果。 */
+#ifdef BOARD_CLP
+    BOARD_FENCE();      /* 同上：只保程序序，不做缓存维护 */
+#else
     BOARD_FENCE();
     BOARD_DCACHE_INVAL(c, (size_t)M * (size_t)N * sizeof *c);
     BOARD_FENCE();
+#endif
 }
 
 /* 绝大多数 GEMM 走这里：权重按什么布局存放，由 qwen3_set_weight_layout 决定。 */

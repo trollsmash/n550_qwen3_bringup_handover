@@ -144,7 +144,14 @@ void qwen3_op_residual_add(float *x, const float *y, int n) {
 int qwen3_op_argmax(const float *v, int n) {
     float mx;
     {
-        vfloat32m1_t acc = __riscv_vfmv_v_f_f32m1(v[0], __riscv_vsetvlmax_e32m1());
+        /* ★ 初值用 -inf，不要用 v[0]。
+         * v[0] 是**标量** load，而标量访存绕不开 L1 D-cache；logits 由 AME
+         * 写（绕 cache），CLP 下又没有 INVAL 兜底，这一读可能拿到上一个
+         * token 的残值。残值若大于真实最大值，mx 就是个不存在的数，
+         * 下面的相等匹配全部落空、函数返回 0 —— 表现为随机吐出 token 0。
+         * 用 -inf 起头既消掉这次标量访存，数值上也完全等价。 */
+        vfloat32m1_t acc = __riscv_vfmv_v_f_f32m1(-__builtin_inff(),
+                                                  __riscv_vsetvlmax_e32m1());
         size_t rest = (size_t)n; const float *p = v;
         for (size_t vl; rest > 0; rest -= vl, p += vl) {
             vl = __riscv_vsetvl_e32m8(rest);

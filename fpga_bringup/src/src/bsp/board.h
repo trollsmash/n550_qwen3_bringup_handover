@@ -308,6 +308,47 @@
 #define BOARD_USE_L1D_ALL 1
 #endif
 
+/* ═══════════════════ CLP：RVV 高速接口窗口 ═══════════════════
+ *
+ * 硬件提供一条 1024-bit 的 RVV 专用访存通路，**不经过 L1 D-cache**：
+ * RVV 访问 BOARD_CLP_RVV_BASE 段，NoC 把它重映射到 BOARD_CLP_DDR_BASE
+ * 那段 DDR。AME 则直接用 DDR 地址（它本来就绕 L1D）。
+ *
+ * 两条路径指向**同一物理内存且都绕 L1D** —— 于是 AME 写完 RVV 立刻能读，
+ * 反之亦然，GEMM 前后那些 l1d_clean_all / l1d_inv_all 可以整个删掉。
+ *
+ * ★ 三条硬约束，违反任何一条都会读到旧数据：
+ *   1. **标量访存绕不开 L1D**。凡是标量写、AME 要读的数据，要么改成 RVV 写
+ *      （g_abuf 的 BF16 转换就是为此改的），要么留在可缓空间并保留同步。
+ *   2. 窗口**只有 RVV 能访问**。AME 必须用 BOARD_CLP_AME_VIEW() 换算回
+ *      DDR 地址，直接拿 RVV 视图喂给 mlae16 会访问到未映射区。
+ *   3. 有局部性、且不与 AME 共享的数据（分词器哈希表、栈）**留在可缓空间**
+ *      更快 —— 走窗口等于放弃 L1D 的命中收益。
+ *
+ * 接口特性：1024-bit/事务，**不发 burst**，outstanding 8。
+ * 吞吐 = 128 B × 8 ÷ 延迟，全靠 outstanding 撑 —— 所以 RVV 循环要用
+ * LMUL=8（一次 1024 B = 正好 8 个事务）才能填满。
+ */
+#ifdef BOARD_CLP
+#define BOARD_CLP_RVV_BASE    0x10000000UL   /* RVV 视图，绕 L1D */
+#define BOARD_CLP_DDR_BASE    0xF0000000UL   /* NoC 重映射目标，AME 用这个 */
+#define BOARD_CLP_BYTES       (256UL * 1024UL * 1024UL)
+
+/* 窗口内的划分。g_abuf 在前、arena 在后，都按 4 KB 对齐。
+ * MAX_SEQ=1024 时 arena 约 240 MB、g_abuf 6 MB，合计吃掉窗口的 96%。 */
+#define BOARD_CLP_ABUF_ADDR   (BOARD_CLP_RVV_BASE)
+#define BOARD_CLP_ABUF_BYTES  (8UL * 1024UL * 1024UL)
+#define BOARD_CLP_ARENA_ADDR  (BOARD_CLP_RVV_BASE + BOARD_CLP_ABUF_BYTES)
+#define BOARD_CLP_ARENA_BYTES (BOARD_CLP_BYTES - BOARD_CLP_ABUF_BYTES)
+
+/* RVV 视图 -> AME 视图。两者只差一个固定偏移。 */
+#define BOARD_CLP_AME_VIEW(p)                                                \
+    ((void *)((uintptr_t)(p) - BOARD_CLP_RVV_BASE + BOARD_CLP_DDR_BASE))
+
+/* 自检函数是 C 代码，放在下面的 __ASSEMBLER__ 保护区里 —— 本文件被
+ * start.S 直接 include，汇编器解析不了函数体。 */
+#endif  /* BOARD_CLP */
+
 /* 镜像版本标识。构建脚本会用 -D 注入 0xMMDDhhmm；
  * 为 0 表示这份镜像不是走标准构建流程编出来的。
  * 加它的原因：反馈回来的串口截图无法判断对方跑的是哪一版，
@@ -318,6 +359,25 @@
 
 /* C 侧把上面的裸数字转成指针用这个；汇编侧直接 li 即可。 */
 #ifndef __ASSEMBLER__
+
+#ifdef BOARD_CLP
+/* 开机自检：往 RVV 视图写、从 AME 视图读回。
+ * 重映射没配好时，症状是"数值莫名不对"而不是崩溃 —— 那种错极难查，
+ * 所以在启动第一秒就挡住。返回 0 表示映射正确。 */
+static inline int board_clp_selftest(void) {
+    volatile unsigned long *rv = (volatile unsigned long *)BOARD_CLP_RVV_BASE;
+    volatile unsigned long *dd = (volatile unsigned long *)BOARD_CLP_DDR_BASE;
+    const unsigned long magic = 0x5A5AC3C3A1B2C3D4UL;
+    rv[0] = magic;
+    __asm__ volatile("fence rw,rw" ::: "memory");
+    if (dd[0] != magic) return 1;              /* RVV 写 -> AME 侧读不到 */
+    dd[1] = ~magic;
+    __asm__ volatile("fence rw,rw" ::: "memory");
+    if (rv[1] != ~magic) return 2;             /* AME 侧写 -> RVV 读不到 */
+    return 0;
+}
+#endif  /* BOARD_CLP */
+
 #include <stdint.h>
 #include <stddef.h>
 #define BOARD_PTR(t, a)  ((volatile t *)(uintptr_t)(a))

@@ -132,6 +132,18 @@ MAXSEQ_DEF=""
 MAXBATCH_DEF=""
 [ -n "${MAX_BATCH:-}" ] && MAXBATCH_DEF="-DQWEN3_MAX_BATCH=$MAX_BATCH"
 
+# CLP=1 走 RVV 高速接口窗口（见 board.h 的 BOARD_CLP 段）：
+#   激活与 KV cache 落在 0x1000_0000 窗口，RVV 绕 L1D 访问，
+#   AME 用重映射后的 0xF000_0000，两者共享同一物理内存，
+#   于是 GEMM 前后的缓存维护指令全部省掉。
+# 产物名带 -clp 后缀，与 L4 的镜像并存、不互相覆盖 —— 两版要做对比。
+CLP_DEF=""
+CLP_TAG=""
+if [ "${CLP:-0}" = "1" ]; then
+    CLP_DEF="-DBOARD_CLP"
+    CLP_TAG="-clp"
+fi
+
 case "${1:-build}" in
 build) build ;;
 run)
@@ -154,11 +166,11 @@ baremetal)
     # start.S 也 include 它，所以 UART 基址只存在一份。
     board_def
     echo "== 交叉编译 bare-metal (board=${BOARD:-qemu}, kernel=$KERNEL, ops=$OPS) =="
-    BM_ELF="$OUT/qwen3_bm-$WTAG.elf"
+    BM_ELF="$OUT/qwen3_bm-$WTAG$CLP_TAG.elf"
     rm -f "$BM_ELF"
     # -Isrc 是为了让 start.S 能 #include "board.h"
     # shellcheck disable=SC2086
-    ${CROSS}gcc $RISCV_CFLAGS -Isrc $BOARD_DEF $WSIZE_DEF $CHAT_GEN_DEF $MAXSEQ_DEF $MAXBATCH_DEF -ffreestanding -nostdlib -nostartfiles \
+    ${CROSS}gcc $RISCV_CFLAGS -Isrc $BOARD_DEF $WSIZE_DEF $CHAT_GEN_DEF $MAXSEQ_DEF $MAXBATCH_DEF $CLP_DEF -ffreestanding -nostdlib -nostartfiles \
         -T src/bsp/qemu_virt.ld src/bsp/start.S \
         src/qwen3.c src/tokenizer.c src/kernels_${KERNEL}.c src/ops_${OPS}.c \
         src/main_baremetal.c $BSP \
@@ -169,9 +181,9 @@ baremetal)
     ln -sf "$(basename "$BM_ELF")"             "$OUT/qwen3_bm.elf"
     ln -sf "$(basename "${BM_ELF%.elf}.diss")" "$OUT/qwen3_bm.diss"
     ln -sf "$(basename "${BM_ELF%.elf}.sym")"  "$OUT/qwen3_bm.sym"
-    printf "   %s  (%.1f KB, 布局 %s, 回答 %s, 上下文 %s, 单批 %s)\n" "$BM_ELF" \
+    printf "   %s  (%.1f KB, 布局 %s, 回答 %s, 上下文 %s, 单批 %s, CLP %s)\n" "$BM_ELF" \
         "$(echo "$(stat -c%s "$BM_ELF")/1024" | bc -l)" "$WTAG" \
-        "${CHAT_GEN:-1}" "${MAX_SEQ:-256}" "${MAX_BATCH:-128}"
+        "${CHAT_GEN:-1}" "${MAX_SEQ:-256}" "${MAX_BATCH:-128}" "${CLP:-0}"
     printf "   %s  (反汇编，按 mepc 定位用)\n" "${BM_ELF%.elf}.diss"
 
     W="$OUT/w-$(basename "$WSRC" .bin).bin"
@@ -187,7 +199,7 @@ baremetal)
     # 这里改为产出 host 经 PCIe 后门要写的三块裸镜像，并打印地址表。
     # ELF 不能直接灌进 DDR —— 必须 objcopy 成 raw binary。
     if [ "${BOARD:-qemu}" = "s2c" ]; then
-        S2C_BIN="$OUT/qwen3_s2c-$WTAG.bin"
+        S2C_BIN="$OUT/qwen3_s2c-$WTAG$CLP_TAG.bin"
         ${CROSS}objcopy -O binary --gap-fill 0 "$BM_ELF" "$S2C_BIN"
         ln -sf "$(basename "$S2C_BIN")" "$OUT/qwen3_s2c.bin"
         echo
