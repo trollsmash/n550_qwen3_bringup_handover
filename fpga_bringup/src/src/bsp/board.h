@@ -50,6 +50,13 @@
  * 看起来却像外部加载没生效。main_baremetal.c 的 check_layout() 守这条。 */
 #define BOARD_WEIGHTS_ADDR    0x88000000
 #define BOARD_TOKENIZER_ADDR  0xD0000000
+/* 激活 arena。原本是 BSS 里的静态数组，夹在程序镜像与 mailbox 之间，
+ * 可用空间只有 127 MB —— MAX_SEQ=1024 / MAX_BATCH=256 要 246 MB。
+ * 放到分词器之后：那里有 765 MB 空闲，且地址整齐，硬件按段配策略好写。
+ * ★ 这块**不在 BSS 里，start.S 不会清零**。前向的每个缓冲都是先写后读
+ *   （kcache 只读已 memcpy 过的位置），不依赖初值，故无需清。 */
+#define BOARD_ARENA_ADDR      0xD1000000
+#define BOARD_ARENA_BYTES     (512u * 1024u * 1024u)
 
 /* sifive_test：写 0x5555 让 QEMU 正常退出。真机上没有这个外设。 */
 #define BOARD_HAS_POWEROFF    1
@@ -163,6 +170,11 @@
  * 时会把权重头部擦掉，症状是"权重 magic 不对"，看起来像加载没生效。 */
 #define BOARD_WEIGHTS_ADDR    (BOARD_DRAM_BASE + 0x08000000)
 #define BOARD_TOKENIZER_ADDR  (BOARD_DRAM_BASE + 0x50000000)
+/* 激活 arena，与 QEMU 分支同址。说明见那一侧的注释 ——
+ * 简言之：BSS 只有 127 MB 可用，而翻倍后的 arena 要 246 MB；
+ * 这块不在 BSS 里，start.S 不会清零，前向逻辑也不依赖初值。 */
+#define BOARD_ARENA_ADDR      (BOARD_DRAM_BASE + 0x51000000)
+#define BOARD_ARENA_BYTES     (512u * 1024u * 1024u)
 
 /* 真机没有 sifive_test，跑完停在死循环里等 host 读结果。 */
 #define BOARD_HAS_POWEROFF    0

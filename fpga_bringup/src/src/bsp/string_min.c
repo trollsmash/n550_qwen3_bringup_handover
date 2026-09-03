@@ -14,6 +14,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* 有 RVV 就用向量搬运。VLEN=1024bit、LMUL=8 时一次 1024 字节，
+ * 而逐字节版一次 1 字节 —— KV cache 每 token 要写 224 KB 全走这里。
+ * 编译时加 -DBSP_NO_RVV_MEMCPY 可退回标量版（对拍或排查用）。 */
+#if defined(__riscv_v) && !defined(BSP_NO_RVV_MEMCPY)
+#include <riscv_vector.h>
+#define BSP_RVV_MEM 1
+#endif
+
 #define NO_LOOP_IDIOM __attribute__((optimize("no-tree-loop-distribute-patterns")))
 
 /* ★ 诊断期版本：退回最朴素的逐字节复制。
@@ -28,6 +36,19 @@
  * 代价：KV cache 每 token 约 229 KB 的搬运慢 8 倍，等效多花约 1.8 MB
  * 的访存 —— 相对每 token 必读的 1.11 GB 权重可以忽略。
  * 结论明确之后可以改回快路径版本。 */
+#ifdef BSP_RVV_MEM
+void *memcpy(void *dst, const void *src, size_t n) {
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    /* vsetvl 会改 vtype，但 vtype 不是 callee-saved，调用方本来就该自己
+     * 重设 —— ops_rvv.c 里每个循环都以 vsetvl 开头，符合这个约定。 */
+    for (size_t vl; n > 0; n -= vl, d += vl, s += vl) {
+        vl = __riscv_vsetvl_e8m8(n);
+        __riscv_vse8_v_u8m8(d, __riscv_vle8_v_u8m8(s, vl), vl);
+    }
+    return dst;
+}
+#else
 NO_LOOP_IDIOM
 void *memcpy(void *dst, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dst;
@@ -35,7 +56,18 @@ void *memcpy(void *dst, const void *src, size_t n) {
     while (n--) *d++ = *s++;
     return dst;
 }
+#endif
 
+#ifdef BSP_RVV_MEM
+void *memset(void *dst, int c, size_t n) {
+    uint8_t *d = (uint8_t *)dst;
+    for (size_t vl; n > 0; n -= vl, d += vl) {
+        vl = __riscv_vsetvl_e8m8(n);
+        __riscv_vse8_v_u8m8(d, __riscv_vmv_v_x_u8m8((uint8_t)c, vl), vl);
+    }
+    return dst;
+}
+#else
 NO_LOOP_IDIOM
 void *memset(void *dst, int c, size_t n) {
     uint8_t *d = (uint8_t *)dst;
@@ -48,14 +80,22 @@ void *memset(void *dst, int c, size_t n) {
     while (n--) *d++ = v;
     return dst;
 }
+#endif
 
 NO_LOOP_IDIOM
 void *memmove(void *dst, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
     if (d == s || n == 0) return dst;
-    if (d < s) { while (n--) *d++ = *s++; }
-    else       { d += n; s += n; while (n--) *--d = *--s; }
+#ifdef BSP_RVV_MEM
+    /* 不重叠、或目标在源之前时，向前搬是安全的，直接走向量版。
+     * 反向重叠只能逐字节倒着来 —— RVV 没有反向 store，且本项目
+     * 从不产生这种调用。 */
+    if (d + n <= s || d < s) return memcpy(dst, src, n);
+#else
+    if (d < s) { while (n--) *d++ = *s++; return dst; }
+#endif
+    d += n; s += n; while (n--) *--d = *--s;
     return dst;
 }
 

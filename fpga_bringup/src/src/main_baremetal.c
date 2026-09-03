@@ -85,7 +85,7 @@ static void uart_init(void) {
 #endif
 }
 
-static void putc_(char c) {
+static void putc_raw(char c) {
     /* 有上限的轮询：真机上等 THRE 是对的，但若 LSR 读不到预期值也不能死等，
      * 否则整个程序静默挂死、毫无线索。 */
     for (int i = 0; i < 100000; i++) {
@@ -101,7 +101,20 @@ static void putc_(char c) {
     *BOARD_PTR(uint8_t, uart_addr(UART_THR)) = (uint8_t)c;
 #endif
 }
-static void P(const char *s) { while (*s) { if (*s == '\n') putc_('\r'); putc_(*s++); } }
+
+/* ★ LF -> CRLF 的转换必须放在**最底层**。
+ *
+ * 串口终端在 raw 模式下收到 LF 只下移一行、不回行首，光标停在原列，
+ * 后续文字便从那一列开始，整段输出呈阶梯状。
+ *
+ * 这里曾经只在 P() 里转换，而模型生成的 token 是逐字节直接送 putc_ 的 ——
+ * 单段回答看不出问题，一旦模型吐出 markdown 列表（带 \n）就原形毕露。
+ * 放到 putc_ 里，所有输出路径（P/U/X/流式 token/进度条）一次覆盖。 */
+static void putc_(char c) {
+    if (c == '\n') putc_raw('\r');
+    putc_raw(c);
+}
+static void P(const char *s) { while (*s) putc_(*s++); }
 static void U(unsigned long v) {
     char b[24]; int i = 0;
     if (!v) { putc_('0'); return; }
@@ -180,7 +193,9 @@ static uint64_t rd_mcycle(void) {
 }
 
 /* ==================== 模型 ==================== */
-static uint8_t g_scratch[QWEN3_SCRATCH_BYTES];
+/* arena 指向 DDR 里的固定地址，不再占 BSS。容量由 board.h 给出，
+ * qwen3_init 会用 QWEN3_SCRATCH_BYTES 校验够不够。 */
+static uint8_t *const g_scratch = BOARD_PTR(uint8_t, BOARD_ARENA_ADDR);
 
 /* golden_meta.json 里 raw 模式的 prompt token（"你好，请介绍一下你自己"）。
  * 回归模式用它，因为有黄金数据可比对。 */
@@ -362,6 +377,21 @@ static void check_layout(void) {
         P("镜像末端越过 WEIGHTS_ADDR="); X(WEIGHTS_ADDR);
         P("\n  → 请调大 WEIGHTS_ADDR 并同步 build_riscv.sh 的 -device loader\n");
         die("内存布局冲突：BSS 清零会擦掉权重");
+    }
+
+    /* arena 现在独立于镜像，单独校验：既要装得下，也不能越过 DRAM 顶。
+     * 它紧跟在分词器之后，所以下界还得躲开 tok.bin。 */
+    P("arena "); X(BOARD_ARENA_ADDR); P(" .. ");
+    X(BOARD_ARENA_ADDR + QWEN3_SCRATCH_BYTES);
+    P("  ("); U(QWEN3_SCRATCH_BYTES >> 20); P(" MiB / 上限 ");
+    U(BOARD_ARENA_BYTES >> 20); P(" MiB)\n");
+    if (QWEN3_SCRATCH_BYTES > BOARD_ARENA_BYTES) {
+        P("arena 需求超过 BOARD_ARENA_BYTES\n");
+        die("内存布局冲突：arena 容量不足");
+    }
+    if ((unsigned long)BOARD_ARENA_ADDR < TOKENIZER_ADDR) {
+        P("arena 起点在分词器之前\n");
+        die("内存布局冲突：arena 会覆盖 tok.bin");
     }
 }
 
@@ -586,7 +616,7 @@ void qwen3_main(void) {
     P("权重 magic OK @ WEIGHTS_ADDR\n");
 
     static qwen3_t m;
-    int rc = qwen3_init(&m, blob, WEIGHTS_SIZE, g_scratch, sizeof g_scratch);
+    int rc = qwen3_init(&m, blob, WEIGHTS_SIZE, g_scratch, BOARD_ARENA_BYTES);
     if (rc != QWEN3_OK) { P(qwen3_strerror(rc)); die("qwen3_init 失败"); }
 
     P("arena "); U(m.arena.used >> 20); P(" MiB   层数 "); U((unsigned long)m.n_layers);

@@ -127,6 +127,11 @@ CHAT_GEN_DEF=""
 MAXSEQ_DEF=""
 [ -n "${MAX_SEQ:-}" ] && MAXSEQ_DEF="-DQWEN3_MAX_SEQ=$MAX_SEQ"
 
+# 单次 prefill 的 token 上限。>128 时 AME 的 M 维要分多个 tile —— 
+# gemm_impl 的 m0 循环本来就支持，但那条路径此前从未被触发过。
+MAXBATCH_DEF=""
+[ -n "${MAX_BATCH:-}" ] && MAXBATCH_DEF="-DQWEN3_MAX_BATCH=$MAX_BATCH"
+
 case "${1:-build}" in
 build) build ;;
 run)
@@ -153,7 +158,7 @@ baremetal)
     rm -f "$BM_ELF"
     # -Isrc 是为了让 start.S 能 #include "board.h"
     # shellcheck disable=SC2086
-    ${CROSS}gcc $RISCV_CFLAGS -Isrc $BOARD_DEF $WSIZE_DEF $CHAT_GEN_DEF $MAXSEQ_DEF -ffreestanding -nostdlib -nostartfiles \
+    ${CROSS}gcc $RISCV_CFLAGS -Isrc $BOARD_DEF $WSIZE_DEF $CHAT_GEN_DEF $MAXSEQ_DEF $MAXBATCH_DEF -ffreestanding -nostdlib -nostartfiles \
         -T src/bsp/qemu_virt.ld src/bsp/start.S \
         src/qwen3.c src/tokenizer.c src/kernels_${KERNEL}.c src/ops_${OPS}.c \
         src/main_baremetal.c $BSP \
@@ -164,9 +169,9 @@ baremetal)
     ln -sf "$(basename "$BM_ELF")"             "$OUT/qwen3_bm.elf"
     ln -sf "$(basename "${BM_ELF%.elf}.diss")" "$OUT/qwen3_bm.diss"
     ln -sf "$(basename "${BM_ELF%.elf}.sym")"  "$OUT/qwen3_bm.sym"
-    printf "   %s  (%.1f KB, 布局 %s, 回答上限 %s, 上下文 %s token)\n" "$BM_ELF" \
+    printf "   %s  (%.1f KB, 布局 %s, 回答 %s, 上下文 %s, 单批 %s)\n" "$BM_ELF" \
         "$(echo "$(stat -c%s "$BM_ELF")/1024" | bc -l)" "$WTAG" \
-        "${CHAT_GEN:-1 默认}" "${MAX_SEQ:-256 默认}"
+        "${CHAT_GEN:-1}" "${MAX_SEQ:-256}" "${MAX_BATCH:-128}"
     printf "   %s  (反汇编，按 mepc 定位用)\n" "${BM_ELF%.elf}.diss"
 
     W="$OUT/w-$(basename "$WSRC" .bin).bin"

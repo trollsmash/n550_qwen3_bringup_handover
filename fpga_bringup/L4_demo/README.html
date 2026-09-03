@@ -83,7 +83,7 @@ td code, th code { white-space:nowrap; }
 <ul><li><code>L2_L3_fullmodel/</code> 的 <code>w.bin</code> 是 <strong>row 布局</strong>，1192100096 字节</li><li>本目录的 <code>w.bin</code> 是 <strong>tile-major</strong>，1192433664 字节</li></ul>
 <p>跨目录混搭会在启动时报 <code>QWEN3_ERR_SIZE</code> 停下。这是<strong>明确的错误行</strong>， 不是 trap，串口上一眼能认出来。</p>
 <h2>回答长度</h2>
-<p>每次回答最多 <strong>128 个 token</strong>（中文约 4.7 字节/token，合 192 个汉字左右）， 模型吐出 EOS 会提前停，短问题不会硬凑满。</p>
+<p>每次回答最多 <strong>256 个 token</strong>（中文约 4.7 字节/token，合 384 个汉字左右）， 模型吐出 EOS 会提前停，短问题不会硬凑满。</p>
 <p>这个上限在编译时注入。<code>L2_L3_fullmodel/</code> 的固件用的是源码默认值 <strong>1</strong> —— 那是给 QEMU 定的（那里每多一个 token 就要再遍历一遍 1.1 GB 权重）， <strong>问一句只答一两个字</strong>。要看完整回答，用本目录这一份。</p>
 <p>生成过程中按任意键可中止，不必等满。</p>
 <h2>多轮对话</h2>
@@ -91,9 +91,9 @@ td code, th code { white-space:nowrap; }
 <pre><code>&gt; 中国最大的淡水湖在哪里
 中国最大的淡水湖是鄱阳湖……
 
-[67/512] &gt; 第二大呢
+[67/1024] &gt; 第二大呢
 （这一轮能看到上一轮的问答）</code></pre>
-<p>提示符里的 <code>[已用/512]</code> 是 KV cache 占用。上下文窗口 <strong>512 token</strong>，按每轮约 70 token 估算能撑七八轮； 满了会自动开始新对话并明确提示，也可以随时输入 <code>new</code> 手动清空。</p>
+<p>提示符里的 <code>[已用/1024]</code> 是 KV cache 占用。上下文窗口 <strong>1024 token</strong>，按每轮约 70 token 估算能撑七八轮； 满了会自动开始新对话并明确提示，也可以随时输入 <code>new</code> 手动清空。</p>
 <p>实现上是 KV cache 跨轮保留、新一轮从已用位置往后写， <strong>比每轮重新 prefill 整段历史更省</strong> —— 省下的正好是一次完整的权重遍历。</p>
 <h2>⚠ 本版含硬件缺陷规避 HW-WAR-001</h2>
 <p>真机上存在这样一个缺陷：<strong>AME 指令与它前面那条「非 AME 且无数据相关」的 指令之间会重叠执行</strong>，导致配置来不及生效。2026-09-01 实测的表现是 <code>mtilem</code> 没配进去，随后第一条 <code>mlae16</code> 报 <code>mcause=2</code>（非法指令， <code>mtval=0x04a7040b</code>）。</p>
