@@ -50,29 +50,99 @@ static uint16_t g_abuf[AME_A_MAX] __attribute__((aligned(64)));
  * 矩阵寄存器名（tr0..tr3 / acc0..acc3）在编码里是立即数字段，只能是
  * 字面量，所以走宏而不是函数参数。
  *
- * ★ 地址与 stride 用通用的 "r" 约束，不再钉死 a0/a1。
- *   曾经钉死是因为怀疑 (a1,t5) 这类组合会被判非法指令 —— 那个推断
- *   后来被推翻了：真根因是 RTL 对 mrelease 的实现破坏 I-cache，取指
- *   取到脏数据，与寄存器分配无关。mrelease 已从全项目移除。
- *   双缓冲要同时持有两组地址与 stride，钉死两个寄存器会逼出大量
- *   多余的搬运指令，所以这里一并解开。
- *   若真机上重新出现 mcause=2，先怀疑这里，退回办法见文件末尾。 */
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║  HW-WAR-001   硬件缺陷规避 —— RTL 修复后应当整体回退              ║
+ * ╚══════════════════════════════════════════════════════════════════╝
+ *
+ * 【缺陷】AME 指令与它前面那条**非 AME 且无数据相关**的指令之间会重叠
+ *   执行，导致配置来不及生效。2026-09-01 真机实测：mtilem 没配进去，
+ *   随后第一条 mlae16 报 mcause=2（mtval=0x04a7040b，build 0x09011236）。
+ *
+ * 【规避】把 mv 与 AME 指令封进**同一个 asm 块**。两个作用缺一不可：
+ *   - mv 写的正是 AME 指令读的寄存器，构成 RAW 依赖，硬件必须等；
+ *   - 同块内编译器不能插指令，也不会把 AME 指令变成 分支或跳转 的落点
+ *     （扫描确认有几处 AME 指令是跳转目标，那种位置无论怎样分配寄存器
+ *      都不可能产生数据相关）。
+ *
+ * 【覆盖范围】set_tile 的三条 csrw、全部矩阵 load/store。
+ *   **mzero / mfmacc 不读任何通用寄存器，无法用此法规避**，只能等 RTL。
+ *
+ * 【回退】编译时加 -DAME_NO_HW_WAR_001，各处 #else 分支即原始写法。
+ *   回退后请重新跑一遍 AME 指令邻接扫描确认无残留风险点。
+ *
+ * ★ 因此地址与 stride 钉死在 a0 / a1。
+ *
+ *   2026-09-01 真机实测（build 0x09011236）：放开约束后编译器分配到
+ *   (rs1=a4, rs2=a0)，主核报 **mcause=2 非法指令**，mtval=0x04a7040b；
+ *   而钉死 (a0,a1) 的 L2/L3 里同一条 mlae16(0x04b5040b) 跑得好好的。
+ *   两份编码只差寄存器号，opcode/funct 完全一致。
+ *
+ *   限制在**主核**而非 AMU：DEC HLD 写明 rs1/rs2 不从指令字提取，
+ *   而是主核读出寄存器**值**后透传给 AMU，所以 AMU 根本不看编号。
+ *   主核那部分 RTL 不在我们手里，只能规避。
+ *
+ *   曾经一度以为这条约束多余（当时把故障归给 mrelease 破坏 I-cache）——
+ *   那是**另一个独立的 bug**，两个都真实存在。别再解开第二次。
+ *
+ *   代价只是每条 load/store 前多一两条 mv，相对 8 KB 的访存可以忽略；
+ *   三路并行照常工作，编译器负责把各自的地址搬进 a0。 */
+#ifndef AME_NO_HW_WAR_001
+/* ── HW-WAR-001 ── mv 与矩阵指令同块：制造 RAW 依赖 + 阻止编译器
+ * 在中间插指令、也阻止矩阵指令成为 分支或跳转 的落点。 */
 #define AME_LOAD_A(tr, ptr, stride)                                          \
-    __asm__ volatile("mlae16 " tr ",(%0),%1"                                 \
-                     :: "r"(ptr), "r"((long)(stride)) : "memory")
+    __asm__ volatile("mv a0, %0\n\t"                                         \
+                     "mv a1, %1\n\t"                                         \
+                     "mlae16 " tr ",(a0),a1"                                 \
+                     :: "r"(ptr), "r"((long)(stride))                        \
+                      : "a0", "a1", "memory")
 #define AME_LOAD_B(tr, ptr, stride)                                          \
-    __asm__ volatile("mlbe16 " tr ",(%0),%1"                                 \
-                     :: "r"(ptr), "r"((long)(stride)) : "memory")
+    __asm__ volatile("mv a0, %0\n\t"                                         \
+                     "mv a1, %1\n\t"                                         \
+                     "mlbe16 " tr ",(a0),a1"                                 \
+                     :: "r"(ptr), "r"((long)(stride))                        \
+                      : "a0", "a1", "memory")
+#else
+#define AME_LOAD_A(tr, ptr, stride)                                          \
+    do { register const void *_p __asm__("a0") = (const void *)(ptr);        \
+         register long _s __asm__("a1") = (long)(stride);                    \
+         __asm__ volatile("mlae16 " tr ",(%0),%1"                            \
+                          :: "r"(_p), "r"(_s) : "memory"); } while (0)
+#define AME_LOAD_B(tr, ptr, stride)                                          \
+    do { register const void *_p __asm__("a0") = (const void *)(ptr);        \
+         register long _s __asm__("a1") = (long)(stride);                    \
+         __asm__ volatile("mlbe16 " tr ",(%0),%1"                            \
+                          :: "r"(_p), "r"(_s) : "memory"); } while (0)
+#endif
 /* acc += B · Aᵀ —— 操作数顺序是 (md, B, A)，写反会得到转置结果。 */
 #define AME_MFMACC(acc, trb, tra)                                            \
     __asm__ volatile("mfmacc.s.bf16 " acc "," trb "," tra)
+#ifndef AME_NO_HW_WAR_001
 #define AME_STORE_C(acc, ptr, stride)                                        \
-    __asm__ volatile("msce32 " acc ",(%0),%1"                                \
-                     :: "r"(ptr), "r"((long)(stride)) : "memory")
+    __asm__ volatile("mv a0, %0\n\t"                                         \
+                     "mv a1, %1\n\t"                                         \
+                     "msce32 " acc ",(a0),a1"                                \
+                     :: "r"(ptr), "r"((long)(stride))                        \
+                      : "a0", "a1", "memory")
+#else
+#define AME_STORE_C(acc, ptr, stride)                                        \
+    do { register void *_p __asm__("a0") = (void *)(ptr);                    \
+         register long _s __asm__("a1") = (long)(stride);                    \
+         __asm__ volatile("msce32 " acc ",(%0),%1"                           \
+                          :: "r"(_p), "r"(_s) : "memory"); } while (0)
+#endif
 
 /* 清零累加器。作用范围由当前的 mtilem × mtilen 决定，故须先 set_tile。 */
 static inline void acc_clear(void) {
     __asm__ volatile("mzero acc0");
+}
+/* 三路并行用前三个累加器。第四个 acc3 用不上 —— mfmacc 的两个源都必须
+ * 在 tile 寄存器里，而 A 常驻一个、只剩三个给 B，路数就被卡在 3。
+ * 硬要凑第四路就得让某个 B 复用已占用的 tr，那要等对应的 mfmacc 读完，
+ * 引入依赖反而串行化。 */
+static inline void acc_clear3(void) {
+    __asm__ volatile("mzero acc0");
+    __asm__ volatile("mzero acc1");
+    __asm__ volatile("mzero acc2");
 }
 
 /* mtilem/mtilen/mtilek 是 CSR 0x803/0x804/0x805。
@@ -80,9 +150,23 @@ static inline void acc_clear(void) {
  * 注意 __riscv_msettilemi 那组立即数版本有 _Static_assert(imm<=0x1f)，
  * 而我们要设 128，只能走寄存器版本。 */
 static inline void set_tile(long m, long n, long k) {
+#ifndef AME_NO_HW_WAR_001
+    /* ── HW-WAR-001 ── 见文件顶部说明。RTL 修好后 -DAME_NO_HW_WAR_001 回退。
+     * 每条 csrw 前挂一条写 t0 的 mv，且三组封在同一个 asm 块里：
+     * mv 写 t0、csrw 读 t0 构成 RAW 依赖，硬件不能把两者重叠；
+     * 同块也让编译器无法在中间插入调度出来的标量指令。 */
+    __asm__ volatile("mv   t0, %0\n\t"
+                     "csrw 0x803, t0\n\t"
+                     "mv   t0, %1\n\t"
+                     "csrw 0x804, t0\n\t"
+                     "mv   t0, %2\n\t"
+                     "csrw 0x805, t0"
+                     :: "r"(m), "r"(n), "r"(k) : "t0");
+#else
     __asm__ volatile("csrw 0x803, %0" :: "r"(m));
     __asm__ volatile("csrw 0x804, %0" :: "r"(n));
     __asm__ volatile("csrw 0x805, %0" :: "r"(k));
+#endif
 }
 
 /* 权重是否为 tile-major。由 qwen3_init 解析 header 后设定。 */
@@ -152,16 +236,89 @@ static void gemm_impl(int tiled, float *c, const float *a, const uint16_t *b,
     for (int m0 = 0; m0 < M; m0 += AME_TILE_M) {
         const int mm = (M - m0 < AME_TILE_M) ? (M - m0) : AME_TILE_M;
 
-        for (int n0 = 0; n0 < N; n0 += AME_TILE_N) {
+        /* A 的地址只跟 k0 走，与 n0 无关 —— 三路并行正是拿这一点做文章。
+         * B 的按布局取，n 参数化以便三路各取各的 tile。 */
+        #define AP(kk0)       (g_abuf + (size_t)m0 * K + (kk0))
+        #define BPn(n_, kk0)  (tiled ? b + b_tile_off((n_), (kk0), K)      \
+                                     : b + (size_t)(n_) * K + (kk0))
+
+        int n0 = 0;
+
+#ifndef AME_NO_PIPELINE
+        /* ═══════ n 维三路并行 ═══════
+         *
+         * 一份 A 喂三个不同的 B tile。三者算的是输出矩阵**互不重叠的列区间**，
+         * 各自累加各自的 k，最后写到 C 的三个相邻位置 —— n 不是归约维，
+         * 所以累加器之间不需要相加。
+         *
+         * 收益不在数据复用：decode 时 M=1，每个权重元素只与唯一的激活值
+         * 相乘一次，复用度恒为 1，软件层面无解（要提高只能增大 M）。
+         * 省下的是 A 的重复加载（N/128 次降到 1/3），而 mtilem=1 时
+         * A 每次才 64 字节，那点量占总访存 0.5%。
+         *
+         * 真正的收益是**把两个 load queue 填满**：原来每个 k 块只发
+         * 一大一小两笔，小的那笔几十周期就回来了，第二个 queue 大半时间
+         * 空着；现在三笔大的排队，通道持续满载。
+         *
+         * 四笔 load 先连续发出、再统一消费 —— 它们之间没有数据依赖，
+         * 这样排能让硬件的乱序窗口一次看到全部四笔，不必指望它跨过
+         * 中间的 mfmacc 去发现后面的 load。
+         *
+         * 只在 K 整除 32 时启用：否则最后一块的 mtilek 不同，而 mtilek 是
+         * CSR、对所有 tile 寄存器全局生效，中途改会毁掉已经装好的那几个。 */
+        if (K % AME_TILE_K == 0 && N >= 3 * AME_TILE_N) {
+            /* ★ CSR 提到组循环之外。所有三路组的形状都是 (mm,128,32)，
+             *   而硬件上改写 mtilem/mtilen/mtilek 会**强制指令排序**、
+             *   切断乱序窗口 —— 每组重设一次等于每 384 列插一道屏障，
+             *   正好卡在「上一组算完、下一组访存该启动」的接缝上。
+             *   整个 GEMM 设一次就够。 */
+            set_tile(mm, AME_TILE_N, AME_TILE_K);
+
+            for (; n0 + 3 * AME_TILE_N <= N; n0 += 3 * AME_TILE_N) {
+                acc_clear3();
+
+                for (int k0 = 0; k0 < K; k0 += AME_TILE_K) {
+                    /* 乘加夹在权重加载之间：操作数一就绪就开算，
+                     * 不必等三块 B 全部到齐。
+                     *
+                     * ★ 别把四笔 load 堆在最前面。只有两个 load queue，
+                     *   第三四笔会卡在发射阶段，**连带堵住排在它们后面的
+                     *   mfmacc** —— 哪怕那些 mfmacc 的操作数早已就绪。
+                     *   那是结构冒险而非数据依赖，乱序执行救不了已经堵在
+                     *   发射端的指令。
+                     *   交错之后稳态下只有两笔 load 在飞，正好一个 queue
+                     *   一笔，中间的 mfmacc 不占 load queue。 */
+                    AME_LOAD_A("tr0", AP(k0), a_stride);
+                    AME_LOAD_B("tr1", BPn(n0,                    k0), b_stride);
+                    AME_MFMACC("acc0", "tr1", "tr0");
+                    AME_LOAD_B("tr2", BPn(n0 +     AME_TILE_N,   k0), b_stride);
+                    AME_MFMACC("acc1", "tr2", "tr0");
+                    AME_LOAD_B("tr3", BPn(n0 + 2 * AME_TILE_N,   k0), b_stride);
+                    AME_MFMACC("acc2", "tr3", "tr0");
+                }
+
+                /* 不重设 CSR：k 循环内一条 csrw 都没有，msce32 要的
+                 * mtilem/mtilen 仍是进入这一组时的值。多设一次不改变
+                 * 任何行为，只白插三道屏障。 */
+                float *cp = c + (size_t)m0 * N + n0;
+                /* 三个 msce32 写到互不重叠的列区间，可以连续发出。 */
+                AME_STORE_C("acc0", cp,                      c_stride);
+                AME_STORE_C("acc1", cp +     AME_TILE_N,     c_stride);
+                AME_STORE_C("acc2", cp + 2 * AME_TILE_N,     c_stride);
+            }
+        }
+#endif
+
+        /* 余数：不足三路的尾巴，以及 K 不整除 32 时的全部。
+         * 走单路 + k 维双缓冲 —— 这条路径已过 QEMU 回归，拿它兜底
+         * 比为边界另写一份三路变体稳妥。 */
+        for (; n0 < N; n0 += AME_TILE_N) {
             const int nn = (N - n0 < AME_TILE_N) ? (N - n0) : AME_TILE_N;
 
             set_tile(mm, nn, AME_TILE_K);
             acc_clear();
 
-            /* A 的地址只跟 k0 走，与 n0 无关；B 的按布局取。 */
-            #define AP(kk0) (g_abuf + (size_t)m0 * K + (kk0))
-            #define BP(kk0) (tiled ? b + b_tile_off(n0, (kk0), K)          \
-                                   : b + (size_t)n0 * K + (kk0))
+            #define BP(kk0) BPn(n0, (kk0))
 
             const int nk = K / AME_TILE_K;      /* 整块数 */
 
@@ -215,14 +372,17 @@ static void gemm_impl(int tiled, float *c, const float *a, const uint16_t *b,
                     AME_MFMACC("acc0", "tr1", "tr0");
                 }
             }
-            #undef AP
             #undef BP
 
-            /* 写出 mtilem×mtilen 的 FP32 结果。K 维已累加完，此处 k 值无关。 */
-            set_tile(mm, nn, AME_TILE_K);
+            /* 写出 mtilem×mtilen 的 FP32 结果。
+             * 同样不重设 CSR —— 双缓冲那条路径 k 循环内没动过；
+             * 串行 fallback 那条最后一次 set_tile 的 mtilek 可能是尾块的
+             * kk，但 msce32 只看 mtilem/mtilen，与 k 无关。 */
             float *cp = c + (size_t)m0 * N + n0;
             AME_STORE_C("acc0", cp, c_stride);
         }
+        #undef AP
+        #undef BPn
     }
 
     ame_release();   /* 原为 mrelease，见 board.h 的说明 */

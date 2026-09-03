@@ -95,6 +95,17 @@ td code, th code { white-space:nowrap; }
 （这一轮能看到上一轮的问答）</code></pre>
 <p>提示符里的 <code>[已用/512]</code> 是 KV cache 占用。上下文窗口 <strong>512 token</strong>，按每轮约 70 token 估算能撑七八轮； 满了会自动开始新对话并明确提示，也可以随时输入 <code>new</code> 手动清空。</p>
 <p>实现上是 KV cache 跨轮保留、新一轮从已用位置往后写， <strong>比每轮重新 prefill 整段历史更省</strong> —— 省下的正好是一次完整的权重遍历。</p>
+<h2>⚠ 本版含硬件缺陷规避 HW-WAR-001</h2>
+<p>真机上存在这样一个缺陷：<strong>AME 指令与它前面那条「非 AME 且无数据相关」的 指令之间会重叠执行</strong>，导致配置来不及生效。2026-09-01 实测的表现是 <code>mtilem</code> 没配进去，随后第一条 <code>mlae16</code> 报 <code>mcause=2</code>（非法指令， <code>mtval=0x04a7040b</code>）。</p>
+<p>软件侧的规避：把一条 <code>mv</code> 与 AME 指令封进<strong>同一个 asm 块</strong>—— <code>mv</code> 写的正是 AME 指令要读的寄存器，构成 RAW 依赖迫使硬件等待； 同块也让编译器无法在中间插指令、或把 AME 指令变成分支落点。</p>
+<p>覆盖 <code>set_tile</code> 的三条 <code>csrw</code> 与全部矩阵 load/store。 <strong><code>mzero</code> / <code>mfmacc</code> 不读任何通用寄存器，无法用此法规避</strong>， 目前仍有 5 处暴露，需要 RTL 侧修复。</p>
+<p><strong>RTL 修好之后请回退</strong>，否则白白多执行那些 <code>mv</code>：</p>
+<pre><code># 编译时加这个宏即可回到原始写法
+KERNEL=ame OPS=rvv BOARD=s2c -DAME_NO_HW_WAR_001 ...
+
+# 回退后复查有没有残留风险点
+python3 src/tools/47_scan_ame_adjacency.py &lt;你的.elf&gt; riscv-unknown-elf-</code></pre>
+<p>扫描器会把所有 <code>b*</code> / <code>j</code> 的跳转来源也算作前驱，逐条判断数据相关性， 不只看物理上的前一条指令。</p>
 <h2>关于性能：现在不会更快</h2>
 <p>tile-major 把 GEMM 的行间跨度从 <code>K×2</code>（2048 或 6144 字节）压成 64 字节， 整个 tile 连续 8 KB 且 4 KB 对齐 —— 8 KB 恰好切成两个 ARLEN=63 的 burst， 不跨 4 KB 边界。</p>
 <p><strong>但这套收益要 RTL 支持「stride 等于数据位宽时合并 burst」才能兑现。</strong> 在那之前，L4 与 L3 的 token/s 应当基本一致；若明显更慢，那是 bug，请反馈。</p>
