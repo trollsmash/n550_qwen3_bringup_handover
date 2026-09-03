@@ -278,24 +278,51 @@ static void attention(qwen3_t *m, int layer, int n_token, int pos0) {
         const float *qrow = s->q        + (size_t)i * QWEN3_Q_DIM;
         float       *orow = s->attn_out + (size_t)i * QWEN3_Q_DIM;
 
-        for (int h = 0; h < QWEN3_N_HEADS; h++) {
-            const float *qh = qrow + (size_t)h * QWEN3_HEAD_DIM;
-            const int kvh = h / QWEN3_KV_GROUP;
-            float *att = s->att + (size_t)h * QWEN3_MAX_SEQ;
+        /* ═══ 按 KV head 分组遍历，兑现 GQA 的复用 ═══
+         *
+         * GQA 下 KV_GROUP 个 Q head 共享同一个 kvh，读的是**完全相同**的
+         * K/V 段。原来按 h=0..15 顺序走，h 与 h+1 虽然共享 kvh，两次读之间
+         * 却隔着整个 t 循环 —— 跨度 pos×KV_DIM×4 字节（pos=512 时 2 MB），
+         * L1D 只有几十 KB，第二次读时第一次的数据早被冲光，同一份数据
+         * 白白从 DDR 取了 KV_GROUP 遍。
+         *
+         * 改成外层走 kvh、内层一次喂给组内所有 Q head：kh/vh 读一次用多次，
+         * DDR 访存直接除以 KV_GROUP。
+         *
+         * 数值不变：每个输出元素的累加顺序与原来逐位相同 —— 组内各 head
+         * 的 att[] 与 oh[] 互不相干，只是计算的先后被重排了。 */
+        for (int kvh = 0; kvh < QWEN3_N_KV_HEADS; kvh++) {
+            const int h0 = kvh * QWEN3_KV_GROUP;
 
+            /* 相似度：每个位置的 K 读一次，喂给组内全部 Q head */
             for (int t = 0; t <= pos; t++) {
                 const float *kh = kc + (size_t)t * QWEN3_KV_DIM
                                      + (size_t)kvh * QWEN3_HEAD_DIM;
-                att[t] = qwen3_op_dot(qh, kh, QWEN3_HEAD_DIM) * QWEN3_ATTN_SCALE;
+                for (int g = 0; g < QWEN3_KV_GROUP; g++) {
+                    const int h = h0 + g;
+                    const float *qh = qrow + (size_t)h * QWEN3_HEAD_DIM;
+                    s->att[(size_t)h * QWEN3_MAX_SEQ + t] =
+                        qwen3_op_dot(qh, kh, QWEN3_HEAD_DIM) * QWEN3_ATTN_SCALE;
+                }
             }
-            qwen3_op_softmax(att, pos + 1);
 
-            float *oh = orow + (size_t)h * QWEN3_HEAD_DIM;
-            for (int j = 0; j < QWEN3_HEAD_DIM; j++) oh[j] = 0.0f;
+            for (int g = 0; g < QWEN3_KV_GROUP; g++) {
+                const int h = h0 + g;
+                qwen3_op_softmax(s->att + (size_t)h * QWEN3_MAX_SEQ, pos + 1);
+                float *oh = orow + (size_t)h * QWEN3_HEAD_DIM;
+                for (int j = 0; j < QWEN3_HEAD_DIM; j++) oh[j] = 0.0f;
+            }
+
+            /* 加权求和：每个位置的 V 同样读一次用多次 */
             for (int t = 0; t <= pos; t++) {
                 const float *vh = vc + (size_t)t * QWEN3_KV_DIM
                                      + (size_t)kvh * QWEN3_HEAD_DIM;
-                qwen3_op_axpy(oh, att[t], vh, QWEN3_HEAD_DIM);
+                for (int g = 0; g < QWEN3_KV_GROUP; g++) {
+                    const int h = h0 + g;
+                    qwen3_op_axpy(orow + (size_t)h * QWEN3_HEAD_DIM,
+                                  s->att[(size_t)h * QWEN3_MAX_SEQ + t],
+                                  vh, QWEN3_HEAD_DIM);
+                }
             }
         }
     }

@@ -1,5 +1,5 @@
 # 文件清单（给人看的；机器校验用 checksums.md5）
-# 生成时间 2026-09-03 09:24
+# 生成时间 2026-09-03 11:45
 #
 # 注意：w.bin (1.11 GB) 不在本仓库，也不在下面的清单里 —— 两个目录都是。
 #       大小与 md5 见各自目录下的 GET_WEIGHTS.md，请单独核对。
@@ -220,9 +220,9 @@
           9281  L4_demo/README.html
           5206  L4_demo/README.md
            934  L4_demo/addresses.txt
-         21152  L4_demo/qwen3_s2c.bin
-        390587  L4_demo/qwen3_s2c.diss
-        215040  L4_demo/qwen3_s2c.elf
+         21360  L4_demo/qwen3_s2c.bin
+        394220  L4_demo/qwen3_s2c.diss
+        216720  L4_demo/qwen3_s2c.elf
           3435  L4_demo/qwen3_s2c.sym
        3409016  L4_demo/tok.bin
          14377  README.html
@@ -247,7 +247,7 @@
           2072  src/src/ops.h
           8451  src/src/ops_rvv.c
           2776  src/src/ops_scalar.c
-         19644  src/src/qwen3.c
+         21220  src/src/qwen3.c
           8967  src/src/qwen3.h
           3620  src/src/qwen3_config.h
           3901  src/src/test_kernels.c
