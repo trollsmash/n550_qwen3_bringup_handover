@@ -366,23 +366,7 @@
 /* C 侧把上面的裸数字转成指针用这个；汇编侧直接 li 即可。 */
 #ifndef __ASSEMBLER__
 
-#ifdef BOARD_CLP
-/* 开机自检：往 RVV 视图写、从 AME 视图读回。
- * 重映射没配好时，症状是"数值莫名不对"而不是崩溃 —— 那种错极难查，
- * 所以在启动第一秒就挡住。返回 0 表示映射正确。 */
-static inline int board_clp_selftest(void) {
-    volatile unsigned long *rv = (volatile unsigned long *)BOARD_CLP_RVV_BASE;
-    volatile unsigned long *dd = (volatile unsigned long *)BOARD_CLP_DDR_BASE;
-    const unsigned long magic = 0x5A5AC3C3A1B2C3D4UL;
-    rv[0] = magic;
-    __asm__ volatile("fence rw,rw" ::: "memory");
-    if (dd[0] != magic) return 1;              /* RVV 写 -> AME 侧读不到 */
-    dd[1] = ~magic;
-    __asm__ volatile("fence rw,rw" ::: "memory");
-    if (rv[1] != ~magic) return 2;             /* AME 侧写 -> RVV 读不到 */
-    return 0;
-}
-#endif  /* BOARD_CLP */
+/* CLP 的开机自检放在文件末尾 —— 它要用下面才定义的 BOARD_DCACHE_* 宏。 */
 
 #include <stdint.h>
 #include <stddef.h>
@@ -485,6 +469,47 @@ static inline void ame_release(void) {
 /* 即使不做 cache 操作也保留编译器屏障：防止编译器把访存跨过 AME 指令重排。 */
 #define BOARD_FENCE()             __asm__ volatile("" ::: "memory")
 #endif
+
+#ifdef BOARD_CLP
+/* 开机自检：往 RVV 视图写、从 AME 视图读回。
+ * 重映射没配好时，症状是"数值莫名不对"而不是崩溃 —— 那种错极难查，
+ * 所以在启动第一秒就挡住。返回 0 表示映射正确。 */
+static inline int board_clp_selftest(void) {
+    unsigned long *const rv = (unsigned long *)BOARD_CLP_RVV_BASE;
+    volatile unsigned long *const dd = (volatile unsigned long *)BOARD_CLP_DDR_BASE;
+    const unsigned long magic = 0x5A5AC3C3A1B2C3D4UL;
+    unsigned long got;
+
+    /* ★ 窗口 0x1xxx 只有 RVV 指令能访存，标量碰一下就是 PMA 异常
+     * （mcause=7，mtval 即该地址）—— **这个自检自己也不例外**。
+     * 所以对 rv 一侧的读写全部走 vse64/vle64，不能写成 rv[0] = ...。
+     *
+     * dd 一侧是 0xFxxx 普通 DDR，标量可以访问，但那是可缓地址：
+     * 跨视图比对前必须做 cache 维护，否则比的是 L1D 里的旧行而非 DDR 实际内容。 */
+
+    /* 方向一：RVV 写窗口 -> 从 DDR 视图读回 */
+    __asm__ volatile("vsetivli zero, 1, e64, m1, ta, ma\n\t"
+                     "vmv.v.x  v8, %1\n\t"
+                     "vse64.v  v8, (%0)"
+                     :: "r"(rv), "r"(magic) : "v8", "memory");
+    __asm__ volatile("fence rw,rw" ::: "memory");
+    BOARD_DCACHE_INVAL((void *)dd, 64);        /* 丢掉可能存在的旧行 */
+    __asm__ volatile("fence rw,rw" ::: "memory");
+    if (dd[0] != magic) return 1;
+
+    /* 方向二：标量写 DDR 视图 -> 从窗口读回 */
+    dd[1] = ~magic;
+    BOARD_DCACHE_CLEAN((void *)dd, 64);        /* 脏行刷进 DDR，RVV 才看得到 */
+    __asm__ volatile("fence rw,rw" ::: "memory");
+    __asm__ volatile("vsetivli zero, 1, e64, m1, ta, ma\n\t"
+                     "vle64.v  v8, (%1)\n\t"
+                     "vmv.x.s  %0, v8"
+                     : "=r"(got) : "r"(rv + 1) : "v8", "memory");
+    if (got != ~magic) return 2;
+
+    return 0;
+}
+#endif  /* BOARD_CLP */
 
 #endif /* !__ASSEMBLER__ */
 
