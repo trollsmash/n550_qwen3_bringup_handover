@@ -148,6 +148,20 @@ int qwen3_init(qwen3_t *m, const void *blob, size_t blob_size,
     /* ---- 分配激活缓冲 ---- */
     arena_init(&m->arena, scratch, scratch_size);
     qwen3_state_t *s = &m->s;
+/* QWEN3_ATT_STATIC：把 att 放静态存储而非 arena。
+ *
+ * 用于 CLP 配置 —— 那里 arena 落在只有 RVV 能访存的窗口，而 attention 对
+ * att 有标量下标读写，落到窗口上就是 PMA 异常。att 是唯一 **AME 完全不碰**
+ * 的激活缓冲，挪回普通可缓 DDR 后标量与 RVV 都经 L1D、天然一致；
+ * 且它每 head 仅几 KB、一轮里被读写三次，局部性好，可缓空间反而更快。
+ *
+ * 定义在这里而不是用 BOARD_CLP，是为了让 qwen3.c 保持平台无关 ——
+ * 该宏由构建脚本在选 CLP 时一并给出。 */
+#ifdef QWEN3_ATT_STATIC
+static float g_att_static[(size_t)QWEN3_N_HEADS * QWEN3_MAX_SEQ]
+    __attribute__((aligned(64)));
+#endif
+
 #define ALLOC(field, n)                                                    \
     do {                                                                   \
         s->field = (float *)arena_alloc(&m->arena, (size_t)(n) * sizeof(float), 64); \
@@ -163,7 +177,11 @@ int qwen3_init(qwen3_t *m, const void *blob, size_t blob_size,
     ALLOC(k,        QWEN3_B * QWEN3_KV_DIM);
     ALLOC(v,        QWEN3_B * QWEN3_KV_DIM);
     ALLOC(attn_out, QWEN3_B * QWEN3_Q_DIM);
+#ifdef QWEN3_ATT_STATIC
+    s->att = g_att_static;      /* 不占 arena；见上方说明 */
+#else
     ALLOC(att,      (size_t)QWEN3_N_HEADS * QWEN3_MAX_SEQ);
+#endif
     ALLOC(hb,       QWEN3_B * QWEN3_INTERMEDIATE_SIZE);
     ALLOC(hb2,      QWEN3_B * QWEN3_INTERMEDIATE_SIZE);
     ALLOC(logits,   QWEN3_VOCAB_SIZE);
@@ -310,7 +328,9 @@ static void attention(qwen3_t *m, int layer, int n_token, int pos0) {
                 const int h = h0 + g;
                 qwen3_op_softmax(s->att + (size_t)h * QWEN3_MAX_SEQ, pos + 1);
                 float *oh = orow + (size_t)h * QWEN3_HEAD_DIM;
-                for (int j = 0; j < QWEN3_HEAD_DIM; j++) oh[j] = 0.0f;
+                /* 标量清零在 CLP 下会触发 PMA 异常（attn_out 在只有 RVV
+                 * 能访存的窗口里），memset 已是 RVV 实现。 */
+                memset(oh, 0, QWEN3_HEAD_DIM * sizeof *oh);
             }
 
             /* 加权求和：每个位置的 V 同样读一次用多次 */

@@ -140,7 +140,7 @@ MAXBATCH_DEF=""
 CLP_DEF=""
 CLP_TAG=""
 if [ "${CLP:-0}" = "1" ]; then
-    CLP_DEF="-DBOARD_CLP"
+    CLP_DEF="-DBOARD_CLP -DQWEN3_ATT_STATIC"
     CLP_TAG="-clp"
 fi
 

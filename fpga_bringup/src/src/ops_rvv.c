@@ -93,11 +93,61 @@ void qwen3_op_rope(float *v, int n_heads, int pos) {
     }
 }
 
-/* softmax：求最大与求和向量化，exp 仍是标量（无向量 exp）。 */
+/* softmax：全向量 —— 求最大、指数、求和、归一化都不含标量访存。 */
+/* 向量 expf：exp(x) = 2^k · exp(r)，k = round(x·log2e)，r = x − k·ln2。
+ * r 落在 ±ln2/2 内，泰勒 6 阶即可；2^k 直接把 k 塞进 float 指数位构造。
+ *
+ * 为什么必须有它：这颗核没有硬件超越函数，标量 expf 是软件实现，每次几十到
+ * 上百周期。softmax 与 silu 每 token 合计要调三十万次以上，按 50 周期折算
+ * 已与权重访存同量级 —— 这是过去性能分析里一直没算进去的一块。
+ * 换成向量后 e32m8 一次算 256 个元素、十余条指令。
+ *
+ * 另一重必要性：CLP 下激活在 0x1xxx 窗口，**那段空间只有 RVV 指令能访存**，
+ * 标量访问会触发 PMA 异常。所以这两个算子本来也必须彻底去标量。
+ *
+ * 精度：与 libm 对拍，相对误差 2.5e-7（float 精度极限附近）。 */
+static inline vfloat32m8_t vexpf_m8(vfloat32m8_t x, size_t vl) {
+    const float LOG2E  = 1.44269504088896341f;
+    /* ln2 拆成 HI/LO 两半：k 最大到 127，单精度 ln2 乘上去尾部有效位会丢光，
+     * 分两步减才能保住精度。 */
+    const float LN2_HI = 0.693359375f;
+    const float LN2_LO = -2.12194440e-4f;
+
+    /* 上界防 2^k 溢出；下界取 −87 是因为再小 k+127 会掉进非规格化区，
+     * 移位构造 2^k 的做法在那里失效。exp(−87)≈1.6e−38，对 softmax 无影响。 */
+    x = __riscv_vfmin_vf_f32m8(x,  88.0f, vl);
+    x = __riscv_vfmax_vf_f32m8(x, -87.0f, vl);
+
+    vint32m8_t   ki = __riscv_vfcvt_x_f_v_i32m8(
+                          __riscv_vfmul_vf_f32m8(x, LOG2E, vl), vl);
+    vfloat32m8_t kf = __riscv_vfcvt_f_x_v_f32m8(ki, vl);
+
+    vfloat32m8_t r = __riscv_vfnmsac_vf_f32m8(x, LN2_HI, kf, vl);
+    r = __riscv_vfnmsac_vf_f32m8(r, LN2_LO, kf, vl);
+
+    /* exp(r) 泰勒 6 阶，Horner 展开 */
+    vfloat32m8_t q = __riscv_vfmv_v_f_f32m8(0.0013888889f, vl);   /* 1/720 */
+    q = __riscv_vfadd_vf_f32m8(__riscv_vfmul_vv_f32m8(q, r, vl), 0.008333334f, vl);
+    q = __riscv_vfadd_vf_f32m8(__riscv_vfmul_vv_f32m8(q, r, vl), 0.041666668f, vl);
+    q = __riscv_vfadd_vf_f32m8(__riscv_vfmul_vv_f32m8(q, r, vl), 0.16666667f,  vl);
+    q = __riscv_vfadd_vf_f32m8(__riscv_vfmul_vv_f32m8(q, r, vl), 0.5f,         vl);
+    q = __riscv_vfadd_vf_f32m8(__riscv_vfmul_vv_f32m8(q, r, vl), 1.0f,         vl);
+    q = __riscv_vfadd_vf_f32m8(__riscv_vfmul_vv_f32m8(q, r, vl), 1.0f,         vl);
+
+    /* 2^k：(k+127)<<23 就是 float 的位模式 */
+    vint32m8_t bits = __riscv_vsll_vx_i32m8(
+                          __riscv_vadd_vx_i32m8(ki, 127, vl), 23, vl);
+    return __riscv_vfmul_vv_f32m8(
+               q, __riscv_vreinterpret_v_i32m8_f32m8(bits), vl);
+}
+
 void qwen3_op_softmax(float *x, int n) {
     float mx;
     {
-        vfloat32m1_t acc = __riscv_vfmv_v_f_f32m1(x[0], __riscv_vsetvlmax_e32m1());
+        /* 初值取 −inf，不读 x[0] —— 那是标量访存，CLP 下会触发 PMA 异常。
+         * 数值上与从 x[0] 起始等价。 */
+        vfloat32m1_t acc = __riscv_vfmv_v_f_f32m1(-__builtin_inff(),
+                                                  __riscv_vsetvlmax_e32m1());
         size_t rest = (size_t)n; const float *p = x;
         for (size_t vl; rest > 0; rest -= vl, p += vl) {
             vl = __riscv_vsetvl_e32m8(rest);
@@ -107,9 +157,21 @@ void qwen3_op_softmax(float *x, int n) {
         mx = __riscv_vfmv_f_s_f32m1_f32(acc);
     }
 
-    /* 减最大值后取指数并累加 —— 标量。减最大值是数值稳定性所必需。 */
-    float sum = 0.0f;
-    for (int i = 0; i < n; i++) { x[i] = expf(x[i] - mx); sum += x[i]; }
+    /* 减最大值后取指数并累加。减最大值是数值稳定性所必需；
+     * 指数走向量版本 —— 既是这里最大的一笔开销，也因为标量在 CLP 下不能碰。 */
+    float sum;
+    {
+        vfloat32m1_t acc = __riscv_vfmv_v_f_f32m1(0.0f, __riscv_vsetvlmax_e32m1());
+        size_t rest = (size_t)n; float *p = x;
+        for (size_t vl; rest > 0; rest -= vl, p += vl) {
+            vl = __riscv_vsetvl_e32m8(rest);
+            vfloat32m8_t e = vexpf_m8(
+                __riscv_vfsub_vf_f32m8(__riscv_vle32_v_f32m8(p, vl), mx, vl), vl);
+            __riscv_vse32_v_f32m8(p, e, vl);
+            acc = __riscv_vfredusum_vs_f32m8_f32m1(e, acc, vl);
+        }
+        sum = __riscv_vfmv_f_s_f32m1_f32(acc);
+    }
 
     const float inv = 1.0f / sum;
     size_t rest = (size_t)n; float *p = x;
@@ -123,9 +185,16 @@ void qwen3_op_softmax(float *x, int n) {
 /* silu_mul：expf 是主体开销且无向量版本，向量化收益有限，保持标量。
  * 留在这里而不是回退到 ops_scalar.c，是为了让"当前实现"的语义完整、可独立链接。 */
 void qwen3_op_silu_mul(float *gate, const float *up, int n) {
-    for (int i = 0; i < n; i++) {
-        float g = gate[i];
-        gate[i] = (g / (1.0f + expf(-g))) * up[i];
+    size_t rest = (size_t)n; float *g = gate; const float *u = up;
+    for (size_t vl; rest > 0; rest -= vl, g += vl, u += vl) {
+        vl = __riscv_vsetvl_e32m8(rest);
+        vfloat32m8_t vg = __riscv_vle32_v_f32m8(g, vl);
+        /* sigmoid(g) = 1/(1+exp(−g)) */
+        vfloat32m8_t den = __riscv_vfadd_vf_f32m8(
+            vexpf_m8(__riscv_vfneg_v_f32m8(vg, vl), vl), 1.0f, vl);
+        vfloat32m8_t sig = __riscv_vfdiv_vv_f32m8(vg, den, vl);
+        __riscv_vse32_v_f32m8(
+            g, __riscv_vfmul_vv_f32m8(sig, __riscv_vle32_v_f32m8(u, vl), vl), vl);
     }
 }
 
