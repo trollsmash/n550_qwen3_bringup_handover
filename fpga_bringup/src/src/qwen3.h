@@ -59,6 +59,22 @@ void *arena_alloc(arena_t *a, size_t nbytes, size_t align);
 
 #define QWEN3_B ((size_t)QWEN3_MAX_BATCH)
 
+/* KV cache 的下标：[layer][kvh][pos][head_dim]。
+ *
+ * 关键是**同一个 kv head 的相邻 pos 连续**。attention 沿 t 扫描时地址只差
+ * HEAD_DIM*4 = 256 字节，CLP 的 8 个 outstanding 才用得起来。
+ *
+ * 旧布局是 [layer][pos][kv_dim]，相邻 pos 隔 KV_DIM*4 = 4096 字节 ——
+ * L5 上板实测有效带宽仅 25.7 MB/s，pos=512 时 KV 要吃掉 83% 的时间。
+ *
+ * 总容量不变：N_KV_HEADS * MAX_SEQ * HEAD_DIM == MAX_SEQ * KV_DIM。 */
+#define QWEN3_KV_LSTRIDE                                                   \
+    ((size_t)QWEN3_N_KV_HEADS * QWEN3_MAX_SEQ * QWEN3_HEAD_DIM)
+#define QWEN3_KV_OFF(layer, kvh, pos)                                      \
+    ((size_t)(layer) * QWEN3_KV_LSTRIDE                                    \
+     + (size_t)(kvh) * QWEN3_MAX_SEQ * QWEN3_HEAD_DIM                      \
+     + (size_t)(pos) * QWEN3_HEAD_DIM)
+
 #define QWEN3_SCRATCH_BYTES (                                              \
       QWEN3_A(QWEN3_B * QWEN3_HIDDEN_SIZE)       /* x        */            \
     + QWEN3_A(QWEN3_B * QWEN3_HIDDEN_SIZE)       /* xb       */            \
@@ -120,8 +136,8 @@ typedef struct {
     float *hb;       /* [B][INTER]   */
     float *hb2;      /* [B][INTER]   */
     float *logits;   /* [VOCAB]      只保留最后一个 token 的 */
-    float *kcache;   /* [N_LAYERS][MAX_SEQ][KV_DIM] */
-    float *vcache;   /* [N_LAYERS][MAX_SEQ][KV_DIM] */
+    float *kcache;   /* [N_LAYERS][N_KV_HEADS][MAX_SEQ][HEAD_DIM]，见 QWEN3_KV_OFF */
+    float *vcache;   /* 同上 */
 } qwen3_state_t;
 
 /* 中间激活的 dump 回调。核心代码只负责"在正确的位置调用"，

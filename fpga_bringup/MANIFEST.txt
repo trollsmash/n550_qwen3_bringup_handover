@@ -1,5 +1,5 @@
 # 文件清单（给人看的；机器校验用 checksums.md5）
-# 生成时间 2026-09-04 11:10
+# 生成时间 2026-09-04 12:53
 #
 # 注意：w.bin (1.11 GB) 不在本仓库，也不在下面的清单里 —— 两个目录都是。
 #       大小与 md5 见各自目录下的 GET_WEIGHTS.md，请单独核对。
@@ -213,24 +213,24 @@
          32090  L1_ame_vectors/index.json
           1323  L2_L3_fullmodel/addresses.txt
          19256  L2_L3_fullmodel/qwen3_s2c.bin
-        425244  L2_L3_fullmodel/qwen3_s2c.diss
-        234808  L2_L3_fullmodel/qwen3_s2c.elf
+        424692  L2_L3_fullmodel/qwen3_s2c.diss
+        234776  L2_L3_fullmodel/qwen3_s2c.elf
           3429  L2_L3_fullmodel/qwen3_s2c.sym
        3409016  L2_L3_fullmodel/tok.bin
           9724  L4_demo/README.html
           5607  L4_demo/README.md
           1323  L4_demo/addresses.txt
-         24024  L4_demo/qwen3_s2c.bin
-        429676  L4_demo/qwen3_s2c.diss
-        235176  L4_demo/qwen3_s2c.elf
+         24120  L4_demo/qwen3_s2c.bin
+        431920  L4_demo/qwen3_s2c.diss
+        235960  L4_demo/qwen3_s2c.elf
           3429  L4_demo/qwen3_s2c.sym
        3409016  L4_demo/tok.bin
           6581  L5_demo_CLP/README.html
           2809  L5_demo_CLP/README.md
           1323  L5_demo_CLP/addresses.txt
-         24480  L5_demo_CLP/qwen3_s2c.bin
-        434453  L5_demo_CLP/qwen3_s2c.diss
-        237056  L5_demo_CLP/qwen3_s2c.elf
+         24560  L5_demo_CLP/qwen3_s2c.bin
+        436528  L5_demo_CLP/qwen3_s2c.diss
+        237824  L5_demo_CLP/qwen3_s2c.elf
           3437  L5_demo_CLP/qwen3_s2c.sym
        3409016  L5_demo_CLP/tok.bin
          14377  README.html
@@ -255,8 +255,8 @@
           2072  src/src/ops.h
          12938  src/src/ops_rvv.c
           2776  src/src/ops_scalar.c
-         22213  src/src/qwen3.c
-          8967  src/src/qwen3.h
+         22693  src/src/qwen3.c
+          9875  src/src/qwen3.h
           3620  src/src/qwen3_config.h
           3901  src/src/test_kernels.c
          13529  src/src/tokenizer.c

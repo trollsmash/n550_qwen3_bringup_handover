@@ -287,9 +287,10 @@ static void qk_norm(float *v, const uint16_t *w, int n_heads) {
  * 正确性优先。若日后成为瓶颈再改。 */
 static void attention(qwen3_t *m, int layer, int n_token, int pos0) {
     qwen3_state_t *s = &m->s;
-    const size_t lstride = (size_t)QWEN3_MAX_SEQ * QWEN3_KV_DIM;
-    const float *kc = s->kcache + (size_t)layer * lstride;
-    const float *vc = s->vcache + (size_t)layer * lstride;
+    /* 布局 [layer][kvh][pos][head_dim]：kc/vc 只定位到层，
+     * head 与 pos 的偏移在内层用 QWEN3_KV_OFF 算。 */
+    const float *kc = s->kcache;
+    const float *vc = s->vcache;
 
     for (int i = 0; i < n_token; i++) {
         const int pos = pos0 + i;
@@ -314,8 +315,9 @@ static void attention(qwen3_t *m, int layer, int n_token, int pos0) {
 
             /* 相似度：每个位置的 K 读一次，喂给组内全部 Q head */
             for (int t = 0; t <= pos; t++) {
-                const float *kh = kc + (size_t)t * QWEN3_KV_DIM
-                                     + (size_t)kvh * QWEN3_HEAD_DIM;
+                /* 相邻 t 只差 HEAD_DIM*4 = 256 字节 —— 连续，
+                 * 这正是换布局要拿到的东西。 */
+                const float *kh = kc + QWEN3_KV_OFF(layer, kvh, t);
                 for (int g = 0; g < QWEN3_KV_GROUP; g++) {
                     const int h = h0 + g;
                     const float *qh = qrow + (size_t)h * QWEN3_HEAD_DIM;
@@ -335,8 +337,7 @@ static void attention(qwen3_t *m, int layer, int n_token, int pos0) {
 
             /* 加权求和：每个位置的 V 同样读一次用多次 */
             for (int t = 0; t <= pos; t++) {
-                const float *vh = vc + (size_t)t * QWEN3_KV_DIM
-                                     + (size_t)kvh * QWEN3_HEAD_DIM;
+                const float *vh = vc + QWEN3_KV_OFF(layer, kvh, t);
                 for (int g = 0; g < QWEN3_KV_GROUP; g++) {
                     const int h = h0 + g;
                     qwen3_op_axpy(orow + (size_t)h * QWEN3_HEAD_DIM,
@@ -367,7 +368,6 @@ __attribute__((weak)) void qwen3_on_layer(int layer, int n_layers) {
 
 void qwen3_forward_batch(qwen3_t *m, const int *tokens, int n_token, int pos0) {
     qwen3_state_t *s = &m->s;
-    const size_t lstride = (size_t)QWEN3_MAX_SEQ * QWEN3_KV_DIM;
     const int NT = n_token;
     const size_t H = QWEN3_HIDDEN_SIZE, QD = QWEN3_Q_DIM;
     const size_t KV = QWEN3_KV_DIM, IN = QWEN3_INTERMEDIATE_SIZE;
@@ -410,9 +410,18 @@ void qwen3_forward_batch(qwen3_t *m, const int *tokens, int n_token, int pos0) {
         /* 写 KV cache —— decode 阶段全靠它，写偏一格前几个 token 还正常，
          * 后面才乱，是最难查的一类 bug。 */
         for (int t = 0; t < NT; t++) {
-            const size_t dst = (size_t)l * lstride + (size_t)(pos0 + t) * KV;
-            memcpy(s->kcache + dst, s->k + (size_t)t * KV, KV * sizeof(float));
-            memcpy(s->vcache + dst, s->v + (size_t)t * KV, KV * sizeof(float));
+            /* 布局是 [layer][kvh][pos][head_dim]，而 s->k 是 [t][kv_dim]，
+             * 所以按 kv head 拆开搬。这里从一次 4096 字节变成 8 次 256 字节，
+             * 但写入每层每 token 只做一次，读取却要做 pos+1 次 —— 值得。 */
+            for (int kvh = 0; kvh < QWEN3_N_KV_HEADS; kvh++) {
+                const size_t dst = QWEN3_KV_OFF(l, kvh, pos0 + t);
+                const size_t src = (size_t)t * KV
+                                 + (size_t)kvh * QWEN3_HEAD_DIM;
+                memcpy(s->kcache + dst, s->k + src,
+                       QWEN3_HEAD_DIM * sizeof(float));
+                memcpy(s->vcache + dst, s->v + src,
+                       QWEN3_HEAD_DIM * sizeof(float));
+            }
         }
 
         attention(m, l, NT, pos0);
