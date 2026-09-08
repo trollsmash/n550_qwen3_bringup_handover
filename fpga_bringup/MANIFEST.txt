@@ -1,5 +1,5 @@
 # 文件清单（给人看的；机器校验用 checksums.md5）
-# 生成时间 2026-09-04 12:53
+# 生成时间 2026-09-08 16:09
 #
 # 注意：w.bin (1.11 GB) 不在本仓库，也不在下面的清单里 —— 两个目录都是。
 #       大小与 md5 见各自目录下的 GET_WEIGHTS.md，请单独核对。
@@ -8,9 +8,9 @@
 # 校验：md5sum -c checksums.md5
 
         字节  文件
-          6064  L0_bringup/bringup_s2c.bin
-         89544  L0_bringup/bringup_s2c.diss
-         66368  L0_bringup/bringup_s2c.elf
+          6000  L0_bringup/bringup_s2c.bin
+         89570  L0_bringup/bringup_s2c.diss
+         66688  L0_bringup/bringup_s2c.elf
           1371  L0_bringup/bringup_s2c.sym
          11653  L0_bringup/checklist.html
           6236  L0_bringup/checklist.md
@@ -220,19 +220,27 @@
           9724  L4_demo/README.html
           5607  L4_demo/README.md
           1323  L4_demo/addresses.txt
-         24120  L4_demo/qwen3_s2c.bin
-        431920  L4_demo/qwen3_s2c.diss
-        235960  L4_demo/qwen3_s2c.elf
+         24136  L4_demo/qwen3_s2c.bin
+        432969  L4_demo/qwen3_s2c.diss
+        236848  L4_demo/qwen3_s2c.elf
           3429  L4_demo/qwen3_s2c.sym
        3409016  L4_demo/tok.bin
           6581  L5_demo_CLP/README.html
           2809  L5_demo_CLP/README.md
           1323  L5_demo_CLP/addresses.txt
-         24560  L5_demo_CLP/qwen3_s2c.bin
-        436528  L5_demo_CLP/qwen3_s2c.diss
-        237824  L5_demo_CLP/qwen3_s2c.elf
+         24640  L5_demo_CLP/qwen3_s2c.bin
+        438484  L5_demo_CLP/qwen3_s2c.diss
+        238776  L5_demo_CLP/qwen3_s2c.elf
           3437  L5_demo_CLP/qwen3_s2c.sym
        3409016  L5_demo_CLP/tok.bin
+          6374  L6_demo_opt/README.html
+          2702  L6_demo_opt/README.md
+          1323  L6_demo_opt/addresses.txt
+         18672  L6_demo_opt/qwen3_s2c.bin
+        344545  L6_demo_opt/qwen3_s2c.diss
+        199568  L6_demo_opt/qwen3_s2c.elf
+          3099  L6_demo_opt/qwen3_s2c.sym
+       3409016  L6_demo_opt/tok.bin
          14377  README.html
           9039  README.md
           1323  addresses.txt
@@ -249,19 +257,19 @@
           3626  src/src/kernels_rvvbf16.c
            795  src/src/kernels_scalar.c
           2620  src/src/kernels_tiled.c
-         10297  src/src/main.c
-         37359  src/src/main_baremetal.c
-         11548  src/src/main_qemu.c
+         10337  src/src/main.c
+         44537  src/src/main_baremetal.c
+         11588  src/src/main_qemu.c
           2072  src/src/ops.h
-         12938  src/src/ops_rvv.c
+         16096  src/src/ops_rvv.c
           2776  src/src/ops_scalar.c
-         22693  src/src/qwen3.c
-          9875  src/src/qwen3.h
+         26825  src/src/qwen3.c
+         11254  src/src/qwen3.h
           3620  src/src/qwen3_config.h
           3901  src/src/test_kernels.c
          13529  src/src/tokenizer.c
           3776  src/src/tokenizer.h
          24798  src/tests/bringup.c
           4566  src/tools/47_scan_ame_adjacency.py
-         17114  src/tools/build_riscv.sh
+         18331  src/tools/build_riscv.sh
           4769  src/tools/env.sh

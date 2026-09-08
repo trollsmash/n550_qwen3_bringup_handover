@@ -169,7 +169,7 @@ static int chat_mode(qwen3_t *m, const char *weights_dir_hint, const char *promp
     fflush(stdout);
 
     qwen3_forward_batch(m, g_chat_ids, n_in, 0);
-    int next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
+    int next = qwen3_argmax(qwen3_last_logits(m), QWEN3_VOCAB_SIZE);
 
     for (int i = 0; i < max_new; i++) {
         if (next == QWEN3_EOS_TOKEN_ID_0 || next == QWEN3_EOS_TOKEN_ID_1) break;
@@ -178,7 +178,7 @@ static int chat_mode(qwen3_t *m, const char *weights_dir_hint, const char *promp
         fwrite(piece, 1, plen, stdout);     /* 流式输出：逐 token 打印 */
         fflush(stdout);
         qwen3_forward(m, next, n_in + i);
-        next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
+        next = qwen3_argmax(qwen3_last_logits(m), QWEN3_VOCAB_SIZE);
     }
     printf("\n");
     return 0;
@@ -233,7 +233,7 @@ int main(int argc, char **argv) {
     g_enabled = 0;
     dump_write("c_prefill");
 
-    int next = qwen3_argmax(m.s.logits, QWEN3_VOCAB_SIZE);
+    int next = qwen3_argmax(qwen3_last_logits(&m), QWEN3_VOCAB_SIZE);
     gen[n_gen++] = next;
 
     /* ---------------- Decode：前 3 步各自成批并 dump ---------------- */
@@ -250,7 +250,7 @@ int main(int argc, char **argv) {
             snprintf(stem, sizeof stem, "c_decode%d", step);
             dump_write(stem);
         }
-        next = qwen3_argmax(m.s.logits, QWEN3_VOCAB_SIZE);
+        next = qwen3_argmax(qwen3_last_logits(&m), QWEN3_VOCAB_SIZE);
         gen[n_gen++] = next;
         if (next == QWEN3_EOS_TOKEN_ID_0 || next == QWEN3_EOS_TOKEN_ID_1) break;
     }

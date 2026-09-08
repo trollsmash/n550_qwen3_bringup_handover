@@ -537,6 +537,61 @@ static int build_turn(qwen3_tok_t *tk, const char *prompt, int cont) {
     return (e < 0) ? e : (k + e);
 }
 
+/* 输出一个 token：串口流式 + mailbox 备份。
+ * 串口若不通，host 后门照样能从 mailbox 读到同一份结果。 */
+static void emit_token(qwen3_tok_t *tk, int tok, int idx) {
+    size_t plen;
+    const uint8_t *piece = qwen3_tok_piece(tk, tok, &plen);
+    for (size_t q = 0; q < plen; q++) putc_((char)piece[q]);
+    if (idx < BOARD_MBOX_TOKENS_MAX)
+        *BOARD_PTR(uint32_t, BOARD_MBOX_TOKENS + 4u * (unsigned)idx) =
+            (uint32_t)tok;
+    mbox_text_append(piece, plen);
+}
+
+#ifdef QWEN3_SPECULATIVE
+/* ═══════════════ 投机解码 ═══════════════
+ *
+ * decode 阶段 M=1，而 AME 每周期出 8x8 输出块 —— M 方向那一拍里 7/8 的
+ * 乘法器在空转。一次验 8 个 token 与验 1 个**耗时完全相同**（权重同样只读
+ * 一遍 1.11 GB），于是接受几个就等于快几倍，哪怕接受率很低也是净赚。
+ *
+ * 候选来自 prompt lookup：拿最近 NGRAM 个 token 当模式，在「prompt + 已生成」
+ * 里从后往前找重复，命中就取其后续若干个当猜测。对话里复述专有名词、
+ * 列表、格式化输出时命中率最高。 */
+
+#define SPEC_NGRAM   3     /* 模式长度：太短会乱命中，太长则很难命中 */
+#define SPEC_MAX_K   (QWEN3_SPEC_BATCH - 1)   /* 批里第一个是已确定的 token */
+
+static int  g_hist[QWEN3_MAX_SEQ];   /* prompt + 已生成，供 lookup 用 */
+static int  g_hist_n;
+static unsigned long g_spec_tried, g_spec_hit, g_spec_rounds;
+
+/* 从后往前找最近的重复，返回猜到几个。找不到返回 0（退化成逐 token）。 */
+static int lookup_draft(int *draft, int max_k) {
+    const int n = g_hist_n;
+    if (n < SPEC_NGRAM + 1 || max_k <= 0) return 0;
+    const int *pat = g_hist + n - SPEC_NGRAM;
+    for (int i = n - SPEC_NGRAM - 1; i >= 0; i--) {
+        int ok = 1;
+        for (int j = 0; j < SPEC_NGRAM; j++)
+            if (g_hist[i + j] != pat[j]) { ok = 0; break; }
+        if (!ok) continue;
+        int k = 0;
+        while (k < max_k && i + SPEC_NGRAM + k < n) {
+            draft[k] = g_hist[i + SPEC_NGRAM + k];
+            k++;
+        }
+        if (k > 0) return k;        /* 取最近的一处匹配 */
+    }
+    return 0;
+}
+
+static void hist_push(int tok) {
+    if (g_hist_n < QWEN3_MAX_SEQ) g_hist[g_hist_n++] = tok;
+}
+#endif  /* QWEN3_SPECULATIVE */
+
 static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
     int cont = (g_pos > 0);
     int n_in = build_turn(tk, prompt, cont);
@@ -579,22 +634,75 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
     }
 
     uint64_t c0 = rd_mcycle();
+#ifdef QWEN3_SPECULATIVE
+    /* 新一轮对话（g_pos==0）重置历史；续接则保留，跨轮的重复也能被命中 */
+    if (g_pos == 0) g_hist_n = 0;
+    for (int t = 0; t < n_in; t++) hist_push(g_chat_ids[t]);
+    g_spec_tried = g_spec_hit = g_spec_rounds = 0;
+#endif
     qwen3_forward_batch(m, g_chat_ids, n_in, g_pos);  /* prefill：进度条照常 */
-    int next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
+    int next = qwen3_argmax(qwen3_last_logits(m), QWEN3_VOCAB_SIZE);
     /* 进度条到此为止。换行让答案从行首开始，读起来才是一段话。 */
     g_show_layer = 0;
     P("\n");
     int got = 0, aborted = 0;
+#ifdef QWEN3_SPECULATIVE
+    /* ── 投机路径 ────────────────────────────────────────────
+     * 每轮喂进 [next, d1..dk]。logits[j] 只依赖其左侧内容，恰是
+     * 「给定 next,d1..dj 之后应出什么」，正好验证 d(j+1)。
+     * 第一个不匹配处截断 —— 其后的 logits 基于错误前缀，不可信。 */
+    int pos_cur = g_pos + n_in;
+    while (got < limit) {
+        if (next == QWEN3_EOS_TOKEN_ID_0 || next == QWEN3_EOS_TOKEN_ID_1) break;
+
+        int draft[SPEC_MAX_K];
+        int k = lookup_draft(draft, SPEC_MAX_K);
+        if (k > limit - got - 1) k = limit - got - 1;   /* 别超出预算 */
+        if (k < 0) k = 0;
+
+        int batch[QWEN3_SPEC_BATCH];
+        batch[0] = next;
+        for (int j = 0; j < k; j++) batch[1 + j] = draft[j];
+
+        qwen3_forward_batch(m, batch, k + 1, pos_cur);
+        g_spec_rounds++;
+        g_spec_tried += (unsigned long)k;
+
+        /* batch[0] 是已确定的，先落地 */
+        emit_token(tk, next, got); got++;
+        hist_push(next);
+        int acc = 1;                    /* 本轮真正采纳的位置数 */
+
+        int done = 0;
+        for (int j = 0; j < k && got < limit; j++) {
+            int pred = qwen3_argmax(qwen3_logits_at(m, j), QWEN3_VOCAB_SIZE);
+            if (pred != draft[j]) { next = pred; done = 1; break; }
+            /* 猜中：它本来就是模型会生成的，输出与逐 token 完全一致 */
+            g_spec_hit++;
+            if (pred == QWEN3_EOS_TOKEN_ID_0 || pred == QWEN3_EOS_TOKEN_ID_1) {
+                next = pred; done = 1; break;
+            }
+            emit_token(tk, pred, got); got++;
+            hist_push(pred);
+            acc++;
+        }
+        if (!done)   /* 全中（或 k==0）：用最后一份 logits 产出下一个 */
+            next = qwen3_argmax(qwen3_logits_at(m, k), QWEN3_VOCAB_SIZE);
+
+        g_last_tok = next;
+        pos_cur += acc;             /* 多写进 KV 的部分下一轮自然覆盖 */
+        mbox_set(BOARD_MBOX_NTOKEN, (uint32_t)got);
+
+        if (uart_haschar()) {
+            while (uart_haschar()) (void)uart_getc();
+            aborted = 1; P("  [已中止]"); break;
+        }
+    }
+    g_pos = pos_cur;
+#else
     for (int i = 0; i < limit; i++) {
         if (next == QWEN3_EOS_TOKEN_ID_0 || next == QWEN3_EOS_TOKEN_ID_1) break;
-        size_t plen;
-        const uint8_t *piece = qwen3_tok_piece(tk, next, &plen);
-        for (size_t q = 0; q < plen; q++) putc_((char)piece[q]);   /* 流式 */
-        /* 同一份结果也写进 mailbox：串口若不通，host 后门照样读得到 */
-        if (got < BOARD_MBOX_TOKENS_MAX)
-            *BOARD_PTR(uint32_t, BOARD_MBOX_TOKENS + 4u * (unsigned)got) =
-                (uint32_t)next;
-        mbox_text_append(piece, plen);
+        emit_token(tk, next, got);
         g_last_tok = next;       /* 它不会被 forward，留给下一轮补 */
         got++;
         mbox_set(BOARD_MBOX_NTOKEN, (uint32_t)got);
@@ -614,11 +722,12 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
             break;
         }
         qwen3_forward(m, next, g_pos + n_in + i);
-        next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
+        next = qwen3_argmax(qwen3_last_logits(m), QWEN3_VOCAB_SIZE);
     }
     /* 推进位置：prefill 占了 n_in 个；生成循环里只有前 got-1 个被 forward
      * 进 KV cache，最后一个留在 g_last_tok 里等下一轮补。 */
     g_pos += n_in + (got > 0 ? got - 1 : 0);
+#endif  /* QWEN3_SPECULATIVE */
 
     g_show_layer = 1;          /* 恢复，别影响下一轮 prefill 与其他路径 */
     uint64_t c1 = rd_mcycle();
@@ -644,6 +753,17 @@ static void chat_once(qwen3_t *m, qwen3_tok_t *tk, const char *prompt) {
     P("（本平台 mcycle 非真实周期，未换算时间）");
 #endif
     P(aborted ? "，已中止]\n" : "]\n");
+#ifdef QWEN3_SPECULATIVE
+    /* 命中率是这条路值不值得的唯一判据：加速比约等于每轮平均采纳的 token 数。 */
+    P("  [投机 "); U(g_spec_rounds); P(" 轮，猜 "); U(g_spec_tried);
+    P(" 中 "); U(g_spec_hit);
+    if (g_spec_tried) { P("，命中率 "); U(g_spec_hit * 100 / g_spec_tried); P("%"); }
+    if (g_spec_rounds) {
+        P("，每轮采纳 ");
+        U((unsigned long)got * 100 / g_spec_rounds); P("/100 token");
+    }
+    P("]\n");
+#endif
 }
 
 /* 把 mailbox 的关键字段读回来打一遍。
@@ -763,15 +883,61 @@ void qwen3_main(void) {
     qwen3_forward_batch(&m, g_prompt, N_PROMPT, 0);
     P("done\ndecode  ");
 
-    int next = qwen3_argmax(m.s.logits, QWEN3_VOCAB_SIZE);
+    int next = qwen3_argmax(qwen3_last_logits(&m), QWEN3_VOCAB_SIZE);
     gen[n_gen++] = next;
+#ifdef QWEN3_SPECULATIVE
+    /* 回归模式同样走投机路径 —— 否则投机逻辑要到上板跑交互模式才第一次被
+     * 执行，出错只表现为"回答变奇怪"，极难定位。
+     * 投机的输出与逐 token 生成**逐位相同**，所以黄金 token 依然是有效判据：
+     * 这里对上了，就说明 logits 位置对应、验证截断、pos 推进三处都没错。 */
+    g_hist_n = 0;
+    for (int t = 0; t < N_PROMPT; t++) hist_push(g_prompt[t]);
+    hist_push(next);
+    {
+        int pos_cur = N_PROMPT;
+        while (n_gen < MAX_GEN) {
+            if (next == QWEN3_EOS_TOKEN_ID_0 ||
+                next == QWEN3_EOS_TOKEN_ID_1) break;
+
+            int draft[SPEC_MAX_K];
+            int k = lookup_draft(draft, SPEC_MAX_K);
+            if (k > MAX_GEN - n_gen - 1) k = MAX_GEN - n_gen - 1;
+            if (k < 0) k = 0;
+
+            int batch[QWEN3_SPEC_BATCH];
+            batch[0] = next;
+            for (int j = 0; j < k; j++) batch[1 + j] = draft[j];
+            qwen3_forward_batch(&m, batch, k + 1, pos_cur);
+            g_spec_rounds++; g_spec_tried += (unsigned long)k;
+
+            int acc = 1, done = 0;
+            for (int j = 0; j < k && n_gen < MAX_GEN; j++) {
+                int pred = qwen3_argmax(qwen3_logits_at(&m, j),
+                                        QWEN3_VOCAB_SIZE);
+                if (pred != draft[j]) { next = pred; done = 1; break; }
+                g_spec_hit++;
+                gen[n_gen++] = pred; hist_push(pred); putc_('.');
+                acc++;
+                if (pred == QWEN3_EOS_TOKEN_ID_0 ||
+                    pred == QWEN3_EOS_TOKEN_ID_1) { next = pred; done = 1; break; }
+            }
+            if (!done)
+                next = qwen3_argmax(qwen3_logits_at(&m, k), QWEN3_VOCAB_SIZE);
+            if (n_gen < MAX_GEN) { gen[n_gen++] = next; hist_push(next); putc_('.'); }
+            pos_cur += acc;
+        }
+    }
+    P("\n  投机: "); U(g_spec_rounds); P(" 轮，猜 "); U(g_spec_tried);
+    P(" 中 "); U(g_spec_hit); P("\n");
+#else
     for (int step = 0; step < MAX_GEN - 1; step++) {
         qwen3_forward(&m, next, N_PROMPT + step);
-        next = qwen3_argmax(m.s.logits, QWEN3_VOCAB_SIZE);
+        next = qwen3_argmax(qwen3_last_logits(&m), QWEN3_VOCAB_SIZE);
         gen[n_gen++] = next;
         putc_('.');
         if (next == QWEN3_EOS_TOKEN_ID_0 || next == QWEN3_EOS_TOKEN_ID_1) break;
     }
+#endif
     P("\n\nTOKENS:");
     for (int i = 0; i < n_gen; i++) { putc_(' '); I(gen[i]); }
     P("\n");

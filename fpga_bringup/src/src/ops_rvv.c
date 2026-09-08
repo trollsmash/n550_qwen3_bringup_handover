@@ -67,6 +67,67 @@ void qwen3_op_rmsnorm(float *out, const float *x, const uint16_t *w, int n) {
 /* RoPE：外层 i（half=64 次）算 cos/sin 仍是标量（无向量三角函数），
  * 内层按 head 维向量化 —— 各 head 的同一位置相距 HEAD_DIM，用 strided 访存。
  * n_heads 最多 16，m1 (32 个 FP32) 足够。 */
+#ifdef QWEN3_OPT
+/* rope 的 cos/sin 只与 pos 和 i 有关 —— **28 层算出来完全一样**。
+ * 原来每层每次调用都现算 64 组 powf/cosf/sinf，每 token 白算 3584 组。
+ * 这里改成启动时一次性打表：512 KB BSS 换掉运行时全部超越函数。
+ * 放 BSS 而不是 CLP 窗口，是因为它只读、且被 RVV 反复访问，走 L1D 更快。 */
+static float g_rope_cos[QWEN3_MAX_SEQ][QWEN3_HEAD_DIM / 2];
+static float g_rope_sin[QWEN3_MAX_SEQ][QWEN3_HEAD_DIM / 2];
+static int   g_rope_ready;
+
+static void rope_build_table(void) {
+    const int half = QWEN3_HEAD_DIM / 2;
+    for (int i = 0; i < half; i++) {
+        /* inv_freq 与 pos 无关，提到外层，少算 MAX_SEQ 遍 */
+        float inv_freq = 1.0f / powf(QWEN3_ROPE_THETA,
+                                     (float)(2 * i) / (float)QWEN3_HEAD_DIM);
+        for (int p = 0; p < QWEN3_MAX_SEQ; p++) {
+            float ang = (float)p * inv_freq;
+            g_rope_cos[p][i] = cosf(ang);
+            g_rope_sin[p][i] = sinf(ang);
+        }
+    }
+    g_rope_ready = 1;
+}
+
+void qwen3_op_rope(float *v, int n_heads, int pos) {
+    const int half = QWEN3_HEAD_DIM / 2;
+    if (!g_rope_ready) rope_build_table();
+    if (pos < 0 || pos >= QWEN3_MAX_SEQ) return;   /* 越界静默跳过，与原行为一致 */
+
+    const float *ct = g_rope_cos[pos];
+    const float *st = g_rope_sin[pos];
+
+    /* ★ 外层走 head：每个 head 的 HEAD_DIM 个 float 是连续的 512 字节。
+     * 原来外层走 i、内层用 vlse32 跨 head 取数，stride 512 字节、
+     * 每处只取 4 字节 —— 在 CLP 的 128 字节事务下有效载荷率仅 3%。
+     * 倒过来之后全部是连续访存，e32m4（vlmax=128）正好覆盖半个 head。 */
+    for (int h = 0; h < n_heads; h++) {
+        float *vh = v + (size_t)h * QWEN3_HEAD_DIM;
+        size_t rest = (size_t)half;
+        for (size_t off = 0, vl; rest > 0; rest -= vl, off += vl) {
+            vl = __riscv_vsetvl_e32m4(rest);
+            vfloat32m4_t va = __riscv_vle32_v_f32m4(vh + off, vl);
+            vfloat32m4_t vb = __riscv_vle32_v_f32m4(vh + off + half, vl);
+            vfloat32m4_t vc = __riscv_vle32_v_f32m4(ct + off, vl);
+            vfloat32m4_t vs = __riscv_vle32_v_f32m4(st + off, vl);
+            /* na = a*c - b*s ;  nb = b*c + a*s —— 与原实现同序，逐位相同 */
+            vfloat32m4_t na = __riscv_vfsub_vv_f32m4(
+                                  __riscv_vfmul_vv_f32m4(va, vc, vl),
+                                  __riscv_vfmul_vv_f32m4(vb, vs, vl), vl);
+            vfloat32m4_t nb = __riscv_vfadd_vv_f32m4(
+                                  __riscv_vfmul_vv_f32m4(vb, vc, vl),
+                                  __riscv_vfmul_vv_f32m4(va, vs, vl), vl);
+            __riscv_vse32_v_f32m4(vh + off, na, vl);
+            __riscv_vse32_v_f32m4(vh + off + half, nb, vl);
+        }
+    }
+}
+#else
+/* 原实现：外层走 i、vlse32 跨 head 取数。stride 512 字节而每处只取
+ * 4 字节，在 CLP 的 128 字节事务下有效载荷率仅 3%。保留它是为了
+ * 让 L5 保持原样，可与 L6_demo_opt 做 A/B 对比。 */
 void qwen3_op_rope(float *v, int n_heads, int pos) {
     const int half = QWEN3_HEAD_DIM / 2;
     const ptrdiff_t stride = (ptrdiff_t)QWEN3_HEAD_DIM * (ptrdiff_t)sizeof(float);
@@ -92,6 +153,8 @@ void qwen3_op_rope(float *v, int n_heads, int pos) {
         __riscv_vsse32_v_f32m1(v + i + half, stride, nb, avl);
     }
 }
+#endif  /* QWEN3_OPT */
+
 
 /* softmax：全向量 —— 求最大、指数、求和、归一化都不含标量访存。 */
 /* 向量 expf：exp(x) = 2^k · exp(r)，k = round(x·log2e)，r = x − k·ln2。

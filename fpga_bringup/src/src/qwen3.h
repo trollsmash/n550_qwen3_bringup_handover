@@ -75,6 +75,19 @@ void *arena_alloc(arena_t *a, size_t nbytes, size_t align);
      + (size_t)(kvh) * QWEN3_MAX_SEQ * QWEN3_HEAD_DIM                      \
      + (size_t)(pos) * QWEN3_HEAD_DIM)
 
+/* 投机解码一次验多个 token，att 要按批分配。
+ * 非投机构建下为 1，布局与容量都与从前一致。 */
+/* batch attention 下 att 要按批分配（每个 token 一份 [N_HEADS][MAX_SEQ]）。
+ * 逐 token 版只需一份。QWEN3_SPEC_BATCH 这个名字沿用自投机解码那一版，
+ * 现在的含义是"一次前向最多几个 token 需要各自的 att"。 */
+#ifdef QWEN3_OPT
+#ifndef QWEN3_SPEC_BATCH
+#define QWEN3_SPEC_BATCH QWEN3_MAX_BATCH
+#endif
+#else
+#define QWEN3_SPEC_BATCH 1
+#endif
+
 #define QWEN3_SCRATCH_BYTES (                                              \
       QWEN3_A(QWEN3_B * QWEN3_HIDDEN_SIZE)       /* x        */            \
     + QWEN3_A(QWEN3_B * QWEN3_HIDDEN_SIZE)       /* xb       */            \
@@ -83,10 +96,12 @@ void *arena_alloc(arena_t *a, size_t nbytes, size_t align);
     + QWEN3_A(QWEN3_B * QWEN3_KV_DIM)            /* k        */            \
     + QWEN3_A(QWEN3_B * QWEN3_KV_DIM)            /* v        */            \
     + QWEN3_A(QWEN3_B * QWEN3_Q_DIM)             /* attn_out */            \
-    + QWEN3_A((size_t)QWEN3_N_HEADS * QWEN3_MAX_SEQ)          /* att    */ \
+    + QWEN3_A((size_t)QWEN3_SPEC_BATCH * QWEN3_N_HEADS * QWEN3_MAX_SEQ)   \
+                                                             /* att    */ \
     + QWEN3_A(QWEN3_B * QWEN3_INTERMEDIATE_SIZE) /* hb       */            \
     + QWEN3_A(QWEN3_B * QWEN3_INTERMEDIATE_SIZE) /* hb2      */            \
-    + QWEN3_A(QWEN3_VOCAB_SIZE)         /* logits（只留最后一个 token）*/    \
+    + QWEN3_A((size_t)QWEN3_SPEC_BATCH * QWEN3_VOCAB_SIZE)                 \
+                     /* logits：投机时每个位置各一份，否则只留最后一个 */ \
     + QWEN3_A((size_t)QWEN3_N_LAYERS * QWEN3_MAX_SEQ * QWEN3_KV_DIM)       \
     + QWEN3_A((size_t)QWEN3_N_LAYERS * QWEN3_MAX_SEQ * QWEN3_KV_DIM)       \
     + 64                                /* 首次对齐余量 */                  \
@@ -135,7 +150,8 @@ typedef struct {
     float *att;      /* [N_HEADS * MAX_SEQ]  注意力分数（逐 query 位置复用）*/
     float *hb;       /* [B][INTER]   */
     float *hb2;      /* [B][INTER]   */
-    float *logits;   /* [VOCAB]      只保留最后一个 token 的 */
+    float *logits;   /* 投机模式下是 [n_logits][VOCAB]，否则只有一份 */
+    int    n_logits; /* 本次前向实际产出了几份 logits */   /* [VOCAB]      只保留最后一个 token 的 */
     float *kcache;   /* [N_LAYERS][N_KV_HEADS][MAX_SEQ][HEAD_DIM]，见 QWEN3_KV_OFF */
     float *vcache;   /* 同上 */
 } qwen3_state_t;
@@ -182,6 +198,18 @@ int qwen3_init(qwen3_t *m, const void *blob, size_t blob_size,
 
 /* 计算本配置所需的 scratch 字节数（编译期常量表达式亦可，但用函数更清晰）。 */
 size_t qwen3_scratch_bytes(void);
+
+/* 最后一个位置的 logits。
+ * 投机模式下 s->logits 是 [n_logits][VOCAB]，生成下一个 token 要的是最后一份；
+ * 非投机时 n_logits 恒为 1，退化成 s->logits 本身。
+ * 投机解码验证 draft 时需要中间位置，用 qwen3_logits_at()。 */
+static inline const float *qwen3_last_logits(const qwen3_t *m) {
+    return m->s.logits
+         + (size_t)(m->s.n_logits - 1) * QWEN3_VOCAB_SIZE;
+}
+static inline const float *qwen3_logits_at(const qwen3_t *m, int i) {
+    return m->s.logits + (size_t)i * QWEN3_VOCAB_SIZE;
+}
 
 const char *qwen3_strerror(int err);
 

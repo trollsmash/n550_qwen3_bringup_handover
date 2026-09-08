@@ -184,7 +184,7 @@ static float g_att_static[(size_t)QWEN3_N_HEADS * QWEN3_MAX_SEQ]
 #endif
     ALLOC(hb,       QWEN3_B * QWEN3_INTERMEDIATE_SIZE);
     ALLOC(hb2,      QWEN3_B * QWEN3_INTERMEDIATE_SIZE);
-    ALLOC(logits,   QWEN3_VOCAB_SIZE);
+    ALLOC(logits,   (size_t)QWEN3_SPEC_BATCH * QWEN3_VOCAB_SIZE);
     ALLOC(kcache, (size_t)QWEN3_N_LAYERS * QWEN3_MAX_SEQ * QWEN3_KV_DIM);
     ALLOC(vcache, (size_t)QWEN3_N_LAYERS * QWEN3_MAX_SEQ * QWEN3_KV_DIM);
 #undef ALLOC
@@ -285,6 +285,76 @@ static void qk_norm(float *v, const uint16_t *w, int n_heads) {
  * 逐 query 位置处理，每个位置只看 0..pos（causal），因此不需要显式 mask 矩阵。
  * 没有做 N×N 的矩阵化：prefill 阶段 GEMM 占绝对主导，attention 占比很小，
  * 正确性优先。若日后成为瓶颈再改。 */
+#ifdef QWEN3_OPT
+/* att 的下标：批内每个 token 各有一份 [N_HEADS][MAX_SEQ]。
+ * 逐 token 版只需要一份，batch 版要 n_token 份。 */
+#define QWEN3_ATT_OFF(i, h)                                                \
+    (((size_t)(i) * QWEN3_N_HEADS + (size_t)(h)) * QWEN3_MAX_SEQ)
+
+/* batch 版 attention：**KV 只读一遍**，喂给批内所有 token。
+ *
+ * 逐 token 版对每个 i 都从头扫一遍 K/V，n_token=8 时同一份 KV 要从 DDR
+ * 取 8 遍 —— 实测 KV 成本是 3.75 ms/pos，那样会变成 30 ms/pos，
+ * 投机解码省下的时间全赔进去。
+ *
+ * 因果掩码：对固定的 t，只有 pos0+i >= t 的 token 能看到它，
+ * 即 i >= t - pos0。注意不能写成 break —— i 递增时可见范围是变大的。
+ *
+ * 数值与逐 token 版逐位相同：att[] 各元素互不相干；axpy 仍沿 t 递增累加，
+ * 累加顺序没变（浮点加法不满足结合律，这一点不能马虎）。 */
+static void attention_batch(qwen3_t *m, int layer, int n_token, int pos0) {
+    qwen3_state_t *s = &m->s;
+    const float *kc = s->kcache;
+    const float *vc = s->vcache;
+    const int pos_max = pos0 + n_token - 1;
+
+    for (int kvh = 0; kvh < QWEN3_N_KV_HEADS; kvh++) {
+        const int h0 = kvh * QWEN3_KV_GROUP;
+
+        /* ── 相似度：每个 t 的 K 从 DDR 取一次，喂给所有可见的 token ── */
+        for (int t = 0; t <= pos_max; t++) {
+            const float *kh = kc + QWEN3_KV_OFF(layer, kvh, t);
+            const int i_lo = (t > pos0) ? (t - pos0) : 0;
+            for (int i = i_lo; i < n_token; i++) {
+                const float *qrow = s->q + (size_t)i * QWEN3_Q_DIM;
+                for (int g = 0; g < QWEN3_KV_GROUP; g++) {
+                    const int h = h0 + g;
+                    s->att[QWEN3_ATT_OFF(i, h) + t] =
+                        qwen3_op_dot(qrow + (size_t)h * QWEN3_HEAD_DIM,
+                                     kh, QWEN3_HEAD_DIM) * QWEN3_ATTN_SCALE;
+                }
+            }
+        }
+
+        /* ── 归一化并清空输出 ── */
+        for (int i = 0; i < n_token; i++) {
+            float *orow = s->attn_out + (size_t)i * QWEN3_Q_DIM;
+            for (int g = 0; g < QWEN3_KV_GROUP; g++) {
+                const int h = h0 + g;
+                qwen3_op_softmax(s->att + QWEN3_ATT_OFF(i, h), pos0 + i + 1);
+                memset(orow + (size_t)h * QWEN3_HEAD_DIM, 0,
+                       QWEN3_HEAD_DIM * sizeof(float));
+            }
+        }
+
+        /* ── 加权求和：V 同样每个 t 只取一次 ── */
+        for (int t = 0; t <= pos_max; t++) {
+            const float *vh = vc + QWEN3_KV_OFF(layer, kvh, t);
+            const int i_lo = (t > pos0) ? (t - pos0) : 0;
+            for (int i = i_lo; i < n_token; i++) {
+                float *orow = s->attn_out + (size_t)i * QWEN3_Q_DIM;
+                for (int g = 0; g < QWEN3_KV_GROUP; g++) {
+                    const int h = h0 + g;
+                    qwen3_op_axpy(orow + (size_t)h * QWEN3_HEAD_DIM,
+                                  s->att[QWEN3_ATT_OFF(i, h) + t],
+                                  vh, QWEN3_HEAD_DIM);
+                }
+            }
+        }
+    }
+}
+#endif  /* QWEN3_OPT */
+
 static void attention(qwen3_t *m, int layer, int n_token, int pos0) {
     qwen3_state_t *s = &m->s;
     /* 布局 [layer][kvh][pos][head_dim]：kc/vc 只定位到层，
@@ -424,7 +494,11 @@ void qwen3_forward_batch(qwen3_t *m, const int *tokens, int n_token, int pos0) {
             }
         }
 
+#ifdef QWEN3_OPT
+        attention_batch(m, l, NT, pos0);   /* KV 只读一遍，见函数头说明 */
+#else
         attention(m, l, NT, pos0);
+#endif
         EMIT(m, l, "attn_out", s->attn_out, (size_t)NT * QD);
 
         qwen3_gemm(s->xb2, s->attn_out, w->wo, NT, (int)QD, (int)H);
@@ -464,8 +538,24 @@ void qwen3_forward_batch(qwen3_t *m, const int *tokens, int n_token, int pos0) {
      *   代价是 dump 出的 logits 只有 1 行，而黄金数据是 NT 行 ——
      *   tools/04_compare.py 对此做了特殊处理（取黄金数据的最后一行比对）。 */
     /* ★ 必须走行优先入口：embed_tokens 从不重排（见 kernels.h 的说明）。 */
+#ifdef QWEN3_SPECULATIVE
+    /* 投机解码要逐位置验证 draft，所以整批都算。
+     * lm_head 的 M 从 1 变 8 仍在 AME 的 M 粒度（8）之内 ——
+     * 296 MB 权重照样只读一遍，计算时间也不变，只是多写几份 logits。
+     *
+     * prefill 的 NT 可能远大于 SPEC_BATCH，缓冲装不下；那时按老规矩
+     * 只算最后一个 —— prefill 本来也只要最后那份。 */
+    s->n_logits = (NT <= QWEN3_SPEC_BATCH) ? NT : 1;
+    qwen3_gemm_row(s->logits,
+                   (s->n_logits == NT) ? s->x
+                                       : s->x + (size_t)(NT - 1) * H,
+                   m->w.embed_tokens, s->n_logits, (int)H,
+                   (int)QWEN3_VOCAB_SIZE);
+#else
+    s->n_logits = 1;
     qwen3_gemm_row(s->logits, s->x + (size_t)(NT - 1) * H, m->w.embed_tokens,
                1, (int)H, QWEN3_VOCAB_SIZE);
+#endif
     EMIT(m, -1, "logits", s->logits, QWEN3_VOCAB_SIZE);
 }
 

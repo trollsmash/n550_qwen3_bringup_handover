@@ -162,7 +162,7 @@ static int chat_mode(qwen3_t *m, const char *prompt, int max_new) {
     P(" ops="); P(qwen3_ops_name()); P(")\n回答: ");
 
     qwen3_forward_batch(m, g_chat_ids, n_in, 0);
-    int next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
+    int next = qwen3_argmax(qwen3_last_logits(m), QWEN3_VOCAB_SIZE);
 
     for (int i = 0; i < max_new; i++) {
         if (next == QWEN3_EOS_TOKEN_ID_0 || next == QWEN3_EOS_TOKEN_ID_1) break;
@@ -170,7 +170,7 @@ static int chat_mode(qwen3_t *m, const char *prompt, int max_new) {
         const uint8_t *piece = qwen3_tok_piece(&tk, next, &plen);
         sys_write(1, piece, plen);          /* 流式输出，syscall 无缓冲 */
         qwen3_forward(m, next, n_in + i);
-        next = qwen3_argmax(m->s.logits, QWEN3_VOCAB_SIZE);
+        next = qwen3_argmax(qwen3_last_logits(m), QWEN3_VOCAB_SIZE);
     }
     P("\n");
     return 0;
@@ -252,12 +252,12 @@ void qwen3_main(long argc, char **argv) {
     /* ★ prefill 一次批量前向：GEMM 的 M = N_PROMPT 而非 1，
      *   AME 的 tile 才有机会被填上。prompt 超过 QWEN3_MAX_BATCH 需分块。 */
     qwen3_forward_batch(&m, g_prompt, N_PROMPT, 0);
-    int next = qwen3_argmax(m.s.logits, QWEN3_VOCAB_SIZE);
+    int next = qwen3_argmax(qwen3_last_logits(&m), QWEN3_VOCAB_SIZE);
     gen[n_gen++] = next;
 
     for (int step = 0; step < steps - 1; step++) {
         qwen3_forward(&m, next, N_PROMPT + step);
-        next = qwen3_argmax(m.s.logits, QWEN3_VOCAB_SIZE);
+        next = qwen3_argmax(qwen3_last_logits(&m), QWEN3_VOCAB_SIZE);
         gen[n_gen++] = next;
         if (next == QWEN3_EOS_TOKEN_ID_0 || next == QWEN3_EOS_TOKEN_ID_1) break;
     }

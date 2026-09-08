@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>L6 —— 算子优化版</title>
+<style>
+:root {
+  --bg:#ffffff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0;
+  --code-bg:#f6f8fa; --code-fg:#1f2328; --accent:#0969da;
+  --quote-bar:#d1d9e0; --th-bg:#f6f8fa; --mark:#fff8c5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#3d444d;
+    --code-bg:#161b22; --code-fg:#e6edf3; --accent:#4493f8;
+    --quote-bar:#3d444d; --th-bg:#161b22; --mark:#3f2e00;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; padding:2.5rem 1.25rem 6rem; background:var(--bg); color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",
+              "PingFang SC","Hiragino Sans GB",sans-serif;
+  font-size:16px; line-height:1.7;
+  -webkit-text-size-adjust:100%;
+}
+main { max-width:900px; margin:0 auto; }
+h1,h2,h3 { line-height:1.3; margin:2.2em 0 .8em; font-weight:600; }
+h1 { font-size:1.9rem; margin-top:0; padding-bottom:.35em; border-bottom:1px solid var(--line); }
+h2 { font-size:1.4rem; padding-bottom:.3em; border-bottom:1px solid var(--line); }
+h3 { font-size:1.15rem; }
+p { margin:.9em 0; }
+a { color:var(--accent); text-decoration:none; }
+a:hover { text-decoration:underline; }
+hr { border:0; border-top:1px solid var(--line); margin:2.5em 0; }
+strong { font-weight:650; }
+code {
+  background:var(--code-bg); color:var(--code-fg); border-radius:5px;
+  padding:.15em .38em; font-size:.88em;
+  font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+pre {
+  background:var(--code-bg); border:1px solid var(--line); border-radius:8px;
+  padding:.9rem 1rem; overflow-x:auto; margin:1.1em 0; line-height:1.55;
+}
+pre code { background:none; padding:0; font-size:.85rem; }
+blockquote {
+  margin:1.2em 0; padding:.15em 1.1em; color:var(--muted);
+  border-left:4px solid var(--quote-bar);
+}
+blockquote p { margin:.6em 0; }
+ul,ol { margin:.9em 0; padding-left:1.6em; }
+li { margin:.4em 0; }
+li > p { margin:.35em 0; }
+/* 宽表格自己横向滚动，页面本身绝不横向滚动 */
+.tablewrap { overflow-x:auto; margin:1.3em 0; }
+table { border-collapse:collapse; width:100%; font-size:.93rem; }
+th,td { border:1px solid var(--line); padding:.5em .75em; text-align:left; vertical-align:top; }
+th { background:var(--th-bg); font-weight:650; white-space:nowrap; }
+td code, th code { white-space:nowrap; }
+.meta { color:var(--muted); font-size:.85rem; margin-top:3rem;
+        padding-top:1rem; border-top:1px solid var(--line); }
+@media print {
+  body { padding:0; font-size:11pt; }
+  pre,.tablewrap { break-inside:avoid; }
+  h1,h2,h3 { break-after:avoid; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>L6 —— 算子优化版</h1>
+<p>在 <a href="../L5_demo_CLP/"><code>L5_demo_CLP/</code></a> 基础上做两项访存优化。 <strong>输出与 L5 逐位相同</strong>，其余配置全部一致（tile-major 权重、CLP 窗口、 回答上限 256、上下文 1024），可直接做 A/B 对比。</p>
+<h2>文件与地址</h2>
+<div class='tablewrap'><table><thead><tr><th>文件</th><th>写入地址</th></tr></thead><tbody><tr><td><code>qwen3_s2c.bin</code></td><td>0x80000000</td></tr><tr><td><code>w.bin</code></td><td>0x88000000（与 L4/L5 同一份）</td></tr><tr><td><code>tok.bin</code></td><td>0xD0000000（与 L4/L5 同一份）</td></tr></tbody></table></div>
+<p><code>w.bin</code> 和 <code>tok.bin</code> 与 L4/L5 完全相同，<strong>只需换 <code>qwen3_s2c.bin</code></strong> 即可切换。CLP 窗口的重映射要求与 L5 一致。</p>
+<p>放开复位前，往 0x87F00014 写一个 uint32 = 当前 UTC 秒 （<code>date +%s</code>），提示符会显示北京时间。</p>
+<h2>改了什么</h2>
+<h3>1. attention 按 KV head 批处理</h3>
+<p>原来对<strong>每个</strong> query 都从头扫一遍全部历史 KV，读取量是 O(n × pos)； 现在每个位置只读一次，降到 O(pos)。<strong>只影响 prefill</strong>（decode 时 n=1，无变化）。</p>
+<p>按 kvh-major 布局下实测的 58.4 MB/s 折算：</p>
+<div class='tablewrap'><table><thead><tr><th>场景</th><th>改前</th><th>改后</th><th>省下</th></tr></thead><tbody><tr><td>首轮 pos0=0, n=22</td><td>55 MB</td><td>4.8 MB</td><td>0.9 s</td></tr><tr><td>第三轮 pos0=120</td><td>633 MB</td><td>31 MB</td><td>10.3 s</td></tr><tr><td>长会话 pos0=500</td><td>2805 MB</td><td>115 MB</td><td>46 s</td></tr></tbody></table></div>
+<p>第三轮那 633 MB <strong>比模型权重的一半还多</strong>，全花在重复读同一份 KV 上。</p>
+<h3>2. rope 连续访存 + cos/sin 预计算表</h3>
+<p>原来外层走 i、用 <code>vlse32</code> 跨 head 取数，stride = HEAD_DIM×4 = 512 字节， 每处只取 4 字节 —— 按 CLP 的 128 字节事务算，<strong>有效载荷率仅 3%</strong>。 每 token 触及约 172000 个离散地址，而真正要搬的数据只有 0.34 MB。</p>
+<p>改成外层走 head：每个 head 的 512 字节连续，<code>e32m4</code>（vlmax=128） 正好覆盖半个 head。</p>
+<p>另外 cos/sin <strong>只与 pos 有关、28 层完全相同</strong>，原来每层重算 64 组 powf/cosf/sinf（每 token 共 3584 组）。现在启动时打表（512 KB BSS）， 运行时零超越函数。</p>
+<h2>该看什么</h2>
+<p><strong>decode 的 ms/token 不会有大变化</strong> —— 这两项主要作用于 prefill。 真正的差别在<strong>每轮问题的等待时间</strong>：现在提问后要先等约 10 秒才开始吐字， 改完应当明显缩短。对演示观感而言，&quot;反应快不快&quot;往往比&quot;吐字速度&quot;更醒目。</p>
+<p><strong>对比方法</strong>：同一个问题在 L5 和 L6 各跑一次。重点看<strong>从回车到第一个字出现</strong> 的间隔，以及连续追问三四轮后这个间隔的增长。</p>
+<h2>关于投机解码</h2>
+<p>之前规划的投机解码（prompt lookup）已实测：命中率仅 2%、整体加速 1.10 倍。 Qwen3-0.6B 的中文输出短语级重复太少，这条路走不通。代码保留在 <code>SPEC</code> 开关下，默认关闭，本目录未启用。</p>
+<p class="meta">由 tools/42_md2html.py 从 README.md 生成。
+内容以 Markdown 源文件为准；改了源文件请重新生成本页。</p>
+</main>
+</body>
+</html>
