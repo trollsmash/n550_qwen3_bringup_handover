@@ -88,6 +88,16 @@ void *arena_alloc(arena_t *a, size_t nbytes, size_t align);
 #define QWEN3_SPEC_BATCH 1
 #endif
 
+/* logits 只有**投机解码**才需要每个位置各一份（要逐位置验证 draft）。
+ * batch attention 用不上 —— 它只是把 KV 少读几遍，产出的仍是一份 logits。
+ * 两者曾共用 QWEN3_SPEC_BATCH，于是 OPT 构建白占 128x594KB = 74 MB，
+ * arena 从 232 涨到 313 MB、超出 CLP 窗口的 248 MB，上板被布局检查拦下。 */
+#ifdef QWEN3_SPECULATIVE
+#define QWEN3_LOGITS_BATCH QWEN3_SPEC_BATCH
+#else
+#define QWEN3_LOGITS_BATCH 1
+#endif
+
 #define QWEN3_SCRATCH_BYTES (                                              \
       QWEN3_A(QWEN3_B * QWEN3_HIDDEN_SIZE)       /* x        */            \
     + QWEN3_A(QWEN3_B * QWEN3_HIDDEN_SIZE)       /* xb       */            \
@@ -100,7 +110,7 @@ void *arena_alloc(arena_t *a, size_t nbytes, size_t align);
                                                              /* att    */ \
     + QWEN3_A(QWEN3_B * QWEN3_INTERMEDIATE_SIZE) /* hb       */            \
     + QWEN3_A(QWEN3_B * QWEN3_INTERMEDIATE_SIZE) /* hb2      */            \
-    + QWEN3_A((size_t)QWEN3_SPEC_BATCH * QWEN3_VOCAB_SIZE)                 \
+    + QWEN3_A((size_t)QWEN3_LOGITS_BATCH * QWEN3_VOCAB_SIZE)                 \
                      /* logits：投机时每个位置各一份，否则只留最后一个 */ \
     + QWEN3_A((size_t)QWEN3_N_LAYERS * QWEN3_MAX_SEQ * QWEN3_KV_DIM)       \
     + QWEN3_A((size_t)QWEN3_N_LAYERS * QWEN3_MAX_SEQ * QWEN3_KV_DIM)       \

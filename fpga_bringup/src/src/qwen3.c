@@ -184,7 +184,7 @@ static float g_att_static[(size_t)QWEN3_N_HEADS * QWEN3_MAX_SEQ]
 #endif
     ALLOC(hb,       QWEN3_B * QWEN3_INTERMEDIATE_SIZE);
     ALLOC(hb2,      QWEN3_B * QWEN3_INTERMEDIATE_SIZE);
-    ALLOC(logits,   (size_t)QWEN3_SPEC_BATCH * QWEN3_VOCAB_SIZE);
+    ALLOC(logits,   (size_t)QWEN3_LOGITS_BATCH * QWEN3_VOCAB_SIZE);
     ALLOC(kcache, (size_t)QWEN3_N_LAYERS * QWEN3_MAX_SEQ * QWEN3_KV_DIM);
     ALLOC(vcache, (size_t)QWEN3_N_LAYERS * QWEN3_MAX_SEQ * QWEN3_KV_DIM);
 #undef ALLOC

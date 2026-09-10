@@ -1146,7 +1146,7 @@ int qwen3_init(qwen3_t *m, const void *blob, size_t blob_size,
     800007dc:	60068693          	addi	a3,a3,1536 # 814600 <_stack_size+0x7d4600>
     if (p + nbytes > a->size) return 0;
     800007e0:	07814637          	lui	a2,0x7814
-    ALLOC(logits,   (size_t)QWEN3_SPEC_BATCH * QWEN3_VOCAB_SIZE);
+    ALLOC(logits,   (size_t)QWEN3_LOGITS_BATCH * QWEN3_VOCAB_SIZE);
     800007e4:	a0e7b023          	sd	a4,-1536(a5)
     a->used = p + nbytes;
     800007e8:	a2d7b823          	sd	a3,-1488(a5)
@@ -1305,7 +1305,7 @@ int qwen3_init(qwen3_t *m, const void *blob, size_t blob_size,
     ALLOC(kcache, (size_t)QWEN3_N_LAYERS * QWEN3_MAX_SEQ * QWEN3_KV_DIM);
     80000902:	a007b823          	sd	zero,-1520(a5)
     80000906:	b745                	j	800008a6 <qwen3_init+0x5ac>
-    ALLOC(logits,   (size_t)QWEN3_SPEC_BATCH * QWEN3_VOCAB_SIZE);
+    ALLOC(logits,   (size_t)QWEN3_LOGITS_BATCH * QWEN3_VOCAB_SIZE);
     80000908:	a007b023          	sd	zero,-1536(a5)
     8000090c:	bf69                	j	800008a6 <qwen3_init+0x5ac>
     ALLOC(vcache, (size_t)QWEN3_N_LAYERS * QWEN3_MAX_SEQ * QWEN3_KV_DIM);
@@ -6032,8 +6032,8 @@ void qwen3_main(void) {
     80002e92:	00002517          	auipc	a0,0x2
     80002e96:	6e650513          	addi	a0,a0,1766 # 80005578 <msg_hint+0xbd6>
     80002e9a:	b1fff0ef          	jal	800029b8 <P>
-    80002e9e:	09081537          	lui	a0,0x9081
-    80002ea2:	60550513          	addi	a0,a0,1541 # 9081605 <_stack_size+0x9041605>
+    80002e9e:	09101537          	lui	a0,0x9101
+    80002ea2:	55950513          	addi	a0,a0,1369 # 9101559 <_stack_size+0x90c1559>
     80002ea6:	b35ff0ef          	jal	800029da <X>
     80002eaa:	00002517          	auipc	a0,0x2
     80002eae:	6d650513          	addi	a0,a0,1750 # 80005580 <msg_hint+0xbde>
