@@ -157,8 +157,23 @@ int qwen3_init(qwen3_t *m, const void *blob, size_t blob_size,
  *
  * 定义在这里而不是用 BOARD_CLP，是为了让 qwen3.c 保持平台无关 ——
  * 该宏由构建脚本在选 CLP 时一并给出。 */
+/* att 按 QWEN3_SPEC_BATCH 分配，而 qwen3_forward_batch 允许 NT 一直到
+ * QWEN3_MAX_BATCH。两者脱节时 attention_batch 会按 QWEN3_ATT_OFF 越界写 ——
+ * 症状不是崩在越界处，而是别处访存拿到垃圾地址，极难定位。
+ * 这道编译期断言把它们绑死：改任何一个都会在编译时被挡下。 */
+#ifdef QWEN3_OPT
+/* 消息保持 ASCII：GCC 会把非 ASCII 字符转成八进制转义，报出来没法读。 */
+_Static_assert(QWEN3_SPEC_BATCH >= QWEN3_MAX_BATCH,
+               "QWEN3_SPEC_BATCH must cover QWEN3_MAX_BATCH: att is sized by "
+               "the former, while qwen3_forward_batch accepts NT up to the latter");
+#endif
+
 #ifdef QWEN3_ATT_STATIC
-static float g_att_static[(size_t)QWEN3_N_HEADS * QWEN3_MAX_SEQ]
+/* 必须按 QWEN3_SPEC_BATCH 分配：batch attention 给批内每个 token
+ * 各留一份 [N_HEADS][MAX_SEQ]（见 QWEN3_ATT_OFF）。只留一份的话，
+ * prefill 时 i 一走大就越界踩穿 BSS 里紧邻的数据。 */
+static float g_att_static[(size_t)QWEN3_SPEC_BATCH
+                          * QWEN3_N_HEADS * QWEN3_MAX_SEQ]
     __attribute__((aligned(64)));
 #endif
 
@@ -180,7 +195,8 @@ static float g_att_static[(size_t)QWEN3_N_HEADS * QWEN3_MAX_SEQ]
 #ifdef QWEN3_ATT_STATIC
     s->att = g_att_static;      /* 不占 arena；见上方说明 */
 #else
-    ALLOC(att,      (size_t)QWEN3_N_HEADS * QWEN3_MAX_SEQ);
+    ALLOC(att,      (size_t)QWEN3_SPEC_BATCH
+                    * QWEN3_N_HEADS * QWEN3_MAX_SEQ);
 #endif
     ALLOC(hb,       QWEN3_B * QWEN3_INTERMEDIATE_SIZE);
     ALLOC(hb2,      QWEN3_B * QWEN3_INTERMEDIATE_SIZE);

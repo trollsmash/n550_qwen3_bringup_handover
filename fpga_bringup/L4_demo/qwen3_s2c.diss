@@ -1109,7 +1109,7 @@ int qwen3_init(qwen3_t *m, const void *blob, size_t blob_size,
 #ifdef QWEN3_ATT_STATIC
     s->att = g_att_static;      /* 不占 arena；见上方说明 */
 #else
-    ALLOC(att,      (size_t)QWEN3_N_HEADS * QWEN3_MAX_SEQ);
+    ALLOC(att,      (size_t)QWEN3_SPEC_BATCH
     80000794:	9ed7b423          	sd	a3,-1560(a5)
     a->used = p + nbytes;
     80000798:	a2e7b823          	sd	a4,-1488(a5)
@@ -1118,6 +1118,7 @@ int qwen3_init(qwen3_t *m, const void *blob, size_t blob_size,
     800007a0:	14d9e263          	bltu	s3,a3,800008e4 <qwen3_init+0x5fa>
     return a->base + p;
     800007a4:	974a                	add	a4,a4,s2
+                    * QWEN3_N_HEADS * QWEN3_MAX_SEQ);
 #endif
     ALLOC(hb,       QWEN3_B * QWEN3_INTERMEDIATE_SIZE);
     800007a6:	9ee7b823          	sd	a4,-1552(a5)
@@ -1273,7 +1274,7 @@ int qwen3_init(qwen3_t *m, const void *blob, size_t blob_size,
     ALLOC(xb2,      QWEN3_B * QWEN3_HIDDEN_SIZE);
     800008bc:	9c07b023          	sd	zero,-1600(a5)
     800008c0:	bff1                	j	8000089c <qwen3_init+0x5b2>
-    ALLOC(att,      (size_t)QWEN3_N_HEADS * QWEN3_MAX_SEQ);
+    ALLOC(att,      (size_t)QWEN3_SPEC_BATCH
     800008c2:	9e07b423          	sd	zero,-1560(a5)
     800008c6:	bfd9                	j	8000089c <qwen3_init+0x5b2>
     ALLOC(attn_out, QWEN3_B * QWEN3_Q_DIM);
@@ -6029,8 +6030,8 @@ void qwen3_main(void) {
     80002e76:	00002517          	auipc	a0,0x2
     80002e7a:	60250513          	addi	a0,a0,1538 # 80005478 <msg_hint+0xbd6>
     80002e7e:	b1fff0ef          	jal	8000299c <P>
-    80002e82:	09101537          	lui	a0,0x9101
-    80002e86:	55950513          	addi	a0,a0,1369 # 9101559 <_stack_size+0x90c1559>
+    80002e82:	09141537          	lui	a0,0x9141
+    80002e86:	52950513          	addi	a0,a0,1321 # 9141529 <_stack_size+0x9101529>
     80002e8a:	b35ff0ef          	jal	800029be <X>
     80002e8e:	00002517          	auipc	a0,0x2
     80002e92:	5f250513          	addi	a0,a0,1522 # 80005480 <msg_hint+0xbde>
