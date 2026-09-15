@@ -155,6 +155,26 @@ fi
 #   2) rope 按 head 连续访存 + cos/sin 预计算表 —— 原来是 stride 512 字节的
 #      离散访问（CLP 事务有效载荷率 3%），且每层重算 64 组超越函数。
 #   两项数值均不变，与 L5 逐位相同，可直接 A/B 对比。
+# NOWAR=1 解除 HW-WAR-001 的规避（RTL 已修复该缺陷）。
+#   规避做法是在每条 AME 指令前插两条 mv、并把地址与 stride 钉死在 a0/a1，
+#   靠人为的 RAW 依赖让配置生效。每 token 约 12.5 万次 AME load，
+#   合计 25 万条额外指令 —— 直接开销约 0.5~1%，但那条人为依赖对发射
+#   时机与寄存器分配的影响无法先验估算，需要实测。
+# 产物名带 -nowar，与 L6 并存做单变量对比。
+# 计算单元标签。产物名里原本只有布局与开关，没有 kernel ——
+# 于是 KERNEL=rvvtile 与 KERNEL=ame 会产出同名文件，后编的静默盖掉先编的。
+# 两份二进制外观完全一样，跑出来却是两回事，且没有任何提示。
+# ame 留空标签，既有产物名一个字节不变。
+KERNEL_TAG=""
+[ "$KERNEL" = "ame" ] || KERNEL_TAG="-$KERNEL"
+
+NOWAR_DEF=""
+NOWAR_TAG=""
+if [ "${NOWAR:-0}" = "1" ]; then
+    NOWAR_DEF="-DAME_NO_HW_WAR_001"
+    NOWAR_TAG="-nowar"
+fi
+
 OPT_DEF=""
 OPT_TAG=""
 if [ "${OPT:-0}" = "1" ]; then
@@ -191,11 +211,11 @@ baremetal)
     # start.S 也 include 它，所以 UART 基址只存在一份。
     board_def
     echo "== 交叉编译 bare-metal (board=${BOARD:-qemu}, kernel=$KERNEL, ops=$OPS) =="
-    BM_ELF="$OUT/qwen3_bm-$WTAG$CLP_TAG$SPEC_TAG$OPT_TAG.elf"
+    BM_ELF="$OUT/qwen3_bm-$WTAG$KERNEL_TAG$CLP_TAG$SPEC_TAG$OPT_TAG$NOWAR_TAG.elf"
     rm -f "$BM_ELF"
     # -Isrc 是为了让 start.S 能 #include "board.h"
     # shellcheck disable=SC2086
-    ${CROSS}gcc $RISCV_CFLAGS -Isrc $BOARD_DEF $WSIZE_DEF $CHAT_GEN_DEF $MAXSEQ_DEF $MAXBATCH_DEF $CLP_DEF $SPEC_DEF $OPT_DEF -ffreestanding -nostdlib -nostartfiles \
+    ${CROSS}gcc $RISCV_CFLAGS -Isrc $BOARD_DEF $WSIZE_DEF $CHAT_GEN_DEF $MAXSEQ_DEF $MAXBATCH_DEF $CLP_DEF $SPEC_DEF $OPT_DEF $NOWAR_DEF -ffreestanding -nostdlib -nostartfiles \
         -T src/bsp/qemu_virt.ld src/bsp/start.S \
         src/qwen3.c src/tokenizer.c src/kernels_${KERNEL}.c src/ops_${OPS}.c \
         src/main_baremetal.c $BSP \
@@ -206,9 +226,9 @@ baremetal)
     ln -sf "$(basename "$BM_ELF")"             "$OUT/qwen3_bm.elf"
     ln -sf "$(basename "${BM_ELF%.elf}.diss")" "$OUT/qwen3_bm.diss"
     ln -sf "$(basename "${BM_ELF%.elf}.sym")"  "$OUT/qwen3_bm.sym"
-    printf "   %s  (%.1f KB, 布局 %s, 回答 %s, 上下文 %s, 单批 %s, CLP %s, SPEC %s, OPT %s)\n" "$BM_ELF" \
+    printf "   %s  (%.1f KB, 布局 %s, 回答 %s, 上下文 %s, 单批 %s, CLP %s, SPEC %s, OPT %s, NOWAR %s)\n" "$BM_ELF" \
         "$(echo "$(stat -c%s "$BM_ELF")/1024" | bc -l)" "$WTAG" \
-        "${CHAT_GEN:-1}" "${MAX_SEQ:-256}" "${MAX_BATCH:-128}" "${CLP:-0}" "${SPEC:-0}" "${OPT:-0}"
+        "${CHAT_GEN:-1}" "${MAX_SEQ:-256}" "${MAX_BATCH:-128}" "${CLP:-0}" "${SPEC:-0}" "${OPT:-0}" "${NOWAR:-0}"
     printf "   %s  (反汇编，按 mepc 定位用)\n" "${BM_ELF%.elf}.diss"
 
     W="$OUT/w-$(basename "$WSRC" .bin).bin"
@@ -224,7 +244,7 @@ baremetal)
     # 这里改为产出 host 经 PCIe 后门要写的三块裸镜像，并打印地址表。
     # ELF 不能直接灌进 DDR —— 必须 objcopy 成 raw binary。
     if [ "${BOARD:-qemu}" = "s2c" ]; then
-        S2C_BIN="$OUT/qwen3_s2c-$WTAG$CLP_TAG$SPEC_TAG$OPT_TAG.bin"
+        S2C_BIN="$OUT/qwen3_s2c-$WTAG$KERNEL_TAG$CLP_TAG$SPEC_TAG$OPT_TAG$NOWAR_TAG.bin"
         ${CROSS}objcopy -O binary --gap-fill 0 "$BM_ELF" "$S2C_BIN"
         ln -sf "$(basename "$S2C_BIN")" "$OUT/qwen3_s2c.bin"
         echo

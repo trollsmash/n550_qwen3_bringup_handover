@@ -114,16 +114,19 @@ static uint16_t g_abuf[AME_A_MAX] __attribute__((aligned(64)));
                      :: "r"(ptr), "r"((long)(stride))                        \
                       : "a0", "a1", "memory")
 #else
+/* RTL 修复之后的写法：寄存器交给编译器分配。
+ *
+ * 曾经这里也把地址与 stride 钉在 a0/a1 上 —— 那是 workaround 留下的惯性，
+ * 并非指令本身的要求。钉死会挤占两个调用者保存寄存器、逼编译器在循环里
+ * 多做搬移甚至 spill；放开之后寄存器分配能跟着实际的活跃区间走。
+ *
+ * "memory" 仍然保留：这两条指令确实访存，编译器不能跨过它们重排访问。 */
 #define AME_LOAD_A(tr, ptr, stride)                                          \
-    do { register const void *_p __asm__("a0") = (const void *)(ptr);        \
-         register long _s __asm__("a1") = (long)(stride);                    \
-         __asm__ volatile("mlae16 " tr ",(%0),%1"                            \
-                          :: "r"(_p), "r"(_s) : "memory"); } while (0)
+    __asm__ volatile("mlae16 " tr ",(%0),%1"                                 \
+                     :: "r"(ptr), "r"((long)(stride)) : "memory")
 #define AME_LOAD_B(tr, ptr, stride)                                          \
-    do { register const void *_p __asm__("a0") = (const void *)(ptr);        \
-         register long _s __asm__("a1") = (long)(stride);                    \
-         __asm__ volatile("mlbe16 " tr ",(%0),%1"                            \
-                          :: "r"(_p), "r"(_s) : "memory"); } while (0)
+    __asm__ volatile("mlbe16 " tr ",(%0),%1"                                 \
+                     :: "r"(ptr), "r"((long)(stride)) : "memory")
 #endif
 /* acc += B · Aᵀ —— 操作数顺序是 (md, B, A)，写反会得到转置结果。 */
 #define AME_MFMACC(acc, trb, tra)                                            \
@@ -136,11 +139,10 @@ static uint16_t g_abuf[AME_A_MAX] __attribute__((aligned(64)));
                      :: "r"(ptr), "r"((long)(stride))                        \
                       : "a0", "a1", "memory")
 #else
+/* 同上：不再钉死寄存器。 */
 #define AME_STORE_C(acc, ptr, stride)                                        \
-    do { register void *_p __asm__("a0") = (void *)(ptr);                    \
-         register long _s __asm__("a1") = (long)(stride);                    \
-         __asm__ volatile("msce32 " acc ",(%0),%1"                           \
-                          :: "r"(_p), "r"(_s) : "memory"); } while (0)
+    __asm__ volatile("msce32 " acc ",(%0),%1"                                \
+                     :: "r"(ptr), "r"((long)(stride)) : "memory")
 #endif
 
 /* 清零累加器。作用范围由当前的 mtilem × mtilen 决定，故须先 set_tile。 */

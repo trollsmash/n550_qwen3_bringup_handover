@@ -73,7 +73,7 @@ td code, th code { white-space:nowrap; }
 <h1>L6 —— 算子优化版</h1>
 <p>在 <a href="../L5_demo_CLP/"><code>L5_demo_CLP/</code></a> 基础上做两项访存优化。 <strong>输出与 L5 逐位相同</strong>，其余配置全部一致（tile-major 权重、CLP 窗口、 回答上限 256、上下文 1024），可直接做 A/B 对比。</p>
 <h2>文件与地址</h2>
-<div class='tablewrap'><table><thead><tr><th>文件</th><th>写入地址</th></tr></thead><tbody><tr><td><code>qwen3_s2c.bin</code></td><td>0x80000000</td></tr><tr><td><code>w.bin</code></td><td>0x88000000（与 L4/L5 同一份）</td></tr><tr><td><code>tok.bin</code></td><td>0xD0000000（与 L4/L5 同一份）</td></tr></tbody></table></div>
+<div class='tablewrap'><table><thead><tr><th>文件</th><th>写入地址</th></tr></thead><tbody><tr><td><code>qwen3_s2c.bin</code></td><td>0x80000000</td></tr><tr><td><code>qwen3_s2c-nowar.bin</code></td><td>0x80000000（对比用，见文末）</td></tr><tr><td><code>w.bin</code></td><td>0x88000000（与 L4/L5 同一份）</td></tr><tr><td><code>tok.bin</code></td><td>0xD0000000（与 L4/L5 同一份）</td></tr></tbody></table></div>
 <p><code>w.bin</code> 和 <code>tok.bin</code> 与 L4/L5 完全相同，<strong>只需换 <code>qwen3_s2c.bin</code></strong> 即可切换。CLP 窗口的重映射要求与 L5 一致。</p>
 <p>放开复位前，往 0x87F00014 写一个 uint32 = 当前 UTC 秒 （<code>date +%s</code>），提示符会显示北京时间。</p>
 <h2>改了什么</h2>
@@ -89,6 +89,14 @@ td code, th code { white-space:nowrap; }
 <h2>该看什么</h2>
 <p><strong>decode 的 ms/token 不会有大变化</strong> —— 这两项主要作用于 prefill。 真正的差别在<strong>每轮问题的等待时间</strong>：现在提问后要先等约 10 秒才开始吐字， 改完应当明显缩短。对演示观感而言，&quot;反应快不快&quot;往往比&quot;吐字速度&quot;更醒目。</p>
 <p><strong>对比方法</strong>：同一个问题在 L5 和 L6 各跑一次。重点看<strong>从回车到第一个字出现</strong> 的间隔，以及连续追问三四轮后这个间隔的增长。</p>
+<h2>附：<code>qwen3_s2c-nowar.bin</code>（HW-WAR-001 对比）</h2>
+<p>与本目录的 <code>qwen3_s2c.bin</code> <strong>只差一项</strong>：去掉了 HW-WAR-001 的软件规避。 权重和分词器完全相同，<strong>共用本目录的 <code>w.bin</code> / <code>tok.bin</code>，换固件只写 24 KB</strong>。</p>
+<p>规避的做法是在每条 AME 访存指令前插两条 <code>mv</code>、并把地址与 stride 钉死在 <code>a0</code>/<code>a1</code>，靠人为造出的 RAW 依赖让配置生效。RTL 已修复该缺陷，于是这版 把寄存器交还给编译器分配，那些 <code>mv</code> 也随之消失。</p>
+<p>静态指令数已核对：规避版有 20 处 AME 访存指令紧邻着 <code>mv</code>，nowar 版只剩 1 处。</p>
+<p>能省多少：</p>
+<div class='tablewrap'><table><thead><tr><th></th><th>每 token</th></tr></thead><tbody><tr><td>AME load 次数</td><td>125,440</td></tr><tr><td>规避产生的额外指令</td><td>250,880</td></tr><tr><td>按每条 1 周期 @40 MHz</td><td>6.3 ms（占 1228 ms 的 0.51%）</td></tr><tr><td>按每条 2 周期</td><td>12.5 ms（占 1.02%）</td></tr></tbody></table></div>
+<p><strong>但这个估算只算了指令条数。</strong> 那条人为 RAW 依赖还会影响发射时机和寄存器 分配，这部分无法先验估算 —— 所以实际差值可能高于也可能低于上表， 需要上板实测。这正是发这个固件的原因。</p>
+<p>数值上两版<strong>逐位相同</strong>（QEMU 回归取同一组 token），所以差异纯粹来自执行效率。</p>
 <h2>关于投机解码</h2>
 <p>之前规划的投机解码（prompt lookup）已实测：命中率仅 2%、整体加速 1.10 倍。 Qwen3-0.6B 的中文输出短语级重复太少，这条路走不通。代码保留在 <code>SPEC</code> 开关下，默认关闭，本目录未启用。</p>
 <p class="meta">由 tools/42_md2html.py 从 README.md 生成。
