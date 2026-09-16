@@ -6033,8 +6033,8 @@ void qwen3_main(void) {
     80002e92:	00002517          	auipc	a0,0x2
     80002e96:	6e650513          	addi	a0,a0,1766 # 80005578 <msg_hint+0xbd6>
     80002e9a:	b1fff0ef          	jal	800029b8 <P>
-    80002e9e:	09152537          	lui	a0,0x9152
-    80002ea2:	90250513          	addi	a0,a0,-1790 # 9151902 <_stack_size+0x9111902>
+    80002e9e:	09161537          	lui	a0,0x9161
+    80002ea2:	20250513          	addi	a0,a0,514 # 9161202 <_stack_size+0x9121202>
     80002ea6:	b35ff0ef          	jal	800029da <X>
     80002eaa:	00002517          	auipc	a0,0x2
     80002eae:	6d650513          	addi	a0,a0,1750 # 80005580 <msg_hint+0xbde>

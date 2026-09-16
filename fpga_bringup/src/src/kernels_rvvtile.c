@@ -33,6 +33,11 @@
 #define TILE_N 128
 #define TILE_K 32
 
+/* 行优先路径每算这么多个输出，就用一条 vse32 刷回 c。
+ * 分块是因为 N 可以很大（lm_head 是 151936），整行放不下栈。
+ * 取 128 与 TILE_N 一致，e32m8 下（vlmax=256）一次存完。 */
+#define ROW_CHUNK 128
+
 /* A 的 BF16 暂存。上界与 AME 版一致：MAX_BATCH × INTERMEDIATE_SIZE。
  * CLP 下放窗口内（只有 RVV 碰，不必换视图；AME 不参与本 kernel）。 */
 #define RVT_A_MAX ((size_t)QWEN3_MAX_BATCH * QWEN3_INTERMEDIATE_SIZE)
@@ -105,16 +110,17 @@ void qwen3_gemm(float *c, const float *a, const uint16_t *b,
          * 这一点对 RVV 同样有效，是布局带来的、与指令无关的好处。 */
         for (int n0 = 0; n0 < N; n0 += TILE_N) {
 
-            /* 这一列块的 128 个输出先清零，k0 循环里累加 */
-            {
-                size_t rest = TILE_N;
-                float *p = crow + n0;
-                for (size_t vl; rest > 0; rest -= vl, p += vl) {
-                    vl = __riscv_vsetvl_e32m8(rest);
-                    __riscv_vse32_v_f32m8(p,
-                        __riscv_vfmv_v_f_f32m8(0.0f, vl), vl);
-                }
-            }
+            /* ★ 累加值放栈上，不放 c。
+             *
+             * CLP 下 c 在只有 RVV 能访存的窗口里。写成 crow[n0+i] += ... 会
+             * 编译成 flw/fadd/fsw —— 两条标量访存，上板立刻 PMA 异常
+             * （实测 mcause=5、mepc 指向那条 flw、mtval 落在窗口内）。
+             * 栈在普通 DDR 视图，标量读写合法。
+             *
+             * 顺带删掉了原先对 crow 的清零：累加不再落在 c 上，那一步多余了。
+             * 改完的结构正好与 AME 版对齐 —— mzero、在 AR 里累加、msce32 存一次。 */
+            float acc128[TILE_N];
+            for (int i = 0; i < TILE_N; i++) acc128[i] = 0.0f;
 
             for (int k0 = 0; k0 < K; k0 += TILE_K) {
                 const uint16_t *tile = b + tile_off(n0, k0, K);
@@ -139,7 +145,20 @@ void qwen3_gemm(float *c, const float *a, const uint16_t *b,
                         __riscv_vfmv_v_f_f32m1(0.0f, vlmax1);
                     vfloat32m1_t s =
                         __riscv_vfredusum_vs_f32m2_f32m1(acc, zero, TILE_K);
-                    crow[n0 + i] += __riscv_vfmv_f_s_f32m1_f32(s);
+                    acc128[i] += __riscv_vfmv_f_s_f32m1_f32(s);
+                }
+            }
+
+            /* 一次写回窗口。vse32 是向量访存，窗口允许。
+             * 长度按剩余量夹一下：布局检查保证 N 是 TILE_N 的整数倍，
+             * 但真越界的话是覆盖 c 之后的内存，不会报错 —— 不值得省这个分支。 */
+            {
+                size_t rest = (size_t)((N - n0 < TILE_N) ? (N - n0) : TILE_N);
+                const float *p = acc128;
+                float *q = crow + n0;
+                for (size_t vl; rest > 0; rest -= vl, p += vl, q += vl) {
+                    vl = __riscv_vsetvl_e32m8(rest);
+                    __riscv_vse32_v_f32m8(q, __riscv_vle32_v_f32m8(p, vl), vl);
                 }
             }
         }
@@ -176,21 +195,39 @@ void qwen3_gemm_row(float *c, const float *a, const uint16_t *b,
         float *crow = c + (size_t)m * N;
 
         /* 行优先：整个 K 维连续，可以一路吃满向量宽度 ——
-         * 与上面的 tile 版对照，正好说明布局对向量单元的影响。 */
-        for (int n = 0; n < N; n++) {
-            const uint16_t *brow = b + (size_t)n * K;
-            vfloat32m8_t acc = __riscv_vfmv_v_f_f32m8(0.0f, vlmax8);
-            size_t rest = (size_t)K;
-            const uint16_t *pa = arow, *pb = brow;
-            for (size_t vl; rest > 0; rest -= vl, pa += vl, pb += vl) {
-                vl = __riscv_vsetvl_e32m8(rest);
-                acc = __riscv_vfwmaccbf16_vv_f32m8(acc,
-                          __riscv_vle16_v_bf16m4((const __bf16 *)pa, vl),
-                          __riscv_vle16_v_bf16m4((const __bf16 *)pb, vl), vl);
+         * 与上面的 tile 版对照，正好说明布局对向量单元的影响。
+         *
+         * 与 qwen3_gemm 同样的理由：结果先落栈，再成批写回 —— 直接写
+         * crow[n] 是一条标量 fsw，CLP 下碰窗口会触发 PMA 异常。 */
+        for (int n0 = 0; n0 < N; n0 += ROW_CHUNK) {
+            const int nn = (N - n0 < ROW_CHUNK) ? (N - n0) : ROW_CHUNK;
+            float buf[ROW_CHUNK];
+
+            for (int t = 0; t < nn; t++) {
+                const uint16_t *brow = b + (size_t)(n0 + t) * K;
+                vfloat32m8_t acc = __riscv_vfmv_v_f_f32m8(0.0f, vlmax8);
+                size_t rest = (size_t)K;
+                const uint16_t *pa = arow, *pb = brow;
+                for (size_t vl; rest > 0; rest -= vl, pa += vl, pb += vl) {
+                    vl = __riscv_vsetvl_e32m8(rest);
+                    acc = __riscv_vfwmaccbf16_vv_f32m8(acc,
+                              __riscv_vle16_v_bf16m4((const __bf16 *)pa, vl),
+                              __riscv_vle16_v_bf16m4((const __bf16 *)pb, vl), vl);
+                }
+                vfloat32m1_t zero = __riscv_vfmv_v_f_f32m1(0.0f, vlmax1);
+                buf[t] = __riscv_vfmv_f_s_f32m1_f32(
+                             __riscv_vfredusum_vs_f32m8_f32m1(acc, zero, vlmax8));
             }
-            vfloat32m1_t zero = __riscv_vfmv_v_f_f32m1(0.0f, vlmax1);
-            crow[n] = __riscv_vfmv_f_s_f32m1_f32(
-                          __riscv_vfredusum_vs_f32m8_f32m1(acc, zero, vlmax8));
+
+            {
+                size_t left = (size_t)nn;
+                const float *p = buf;
+                float *q = crow + n0;
+                for (size_t vl; left > 0; left -= vl, p += vl, q += vl) {
+                    vl = __riscv_vsetvl_e32m8(left);
+                    __riscv_vse32_v_f32m8(q, __riscv_vle32_v_f32m8(p, vl), vl);
+                }
+            }
         }
     }
     BOARD_FENCE();
